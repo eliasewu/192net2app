@@ -5,6 +5,13 @@ dist/
 /root/.pm2/
 .DS_Store
 *.bak*
-server.cjs.bak*
-server.cjs.backup
+server.cjs.*
+*.zip
+*.sh
+*.original
 *.localstorage
+.bash*
+.profile
+.ssh/
+.cache/
+.sudo_as_admin_successful
