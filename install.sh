@@ -73,7 +73,7 @@ fi
 # 5. IMPORT SCHEMA
 #===========================================
 echo -e "${YELLOW}[5/10] Importing database schema...${NC}"
-PGPASSWORD=$DB_PASS psql -h localhost -U $DB_USER -d $DB_NAME -f src/database/schema.sql > /dev/null 2>&1
+PGPASSWORD=$DB_PASS psql -h localhost -U $DB_USER -d $DB_NAME -f database_full.sql > /dev/null 2>&1
 echo -e "${GREEN}Database: 27 tables created${NC}"
 
 #===========================================
