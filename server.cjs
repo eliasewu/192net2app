@@ -215,6 +215,22 @@ app.post('/api/billing/invoices', auth, roles('super_admin','admin','billing'), 
   res.json({ success: true, data: r.rows[0] });
 });
 
+// Get current user
+app.get("/api/auth/me", auth, async (req, res) => {
+  try {
+    const r = await pool.query("SELECT id, username, email, role, permissions, client_id, supplier_id, name, is_active, last_login, created_at FROM users WHERE id=$1", [req.user.id]);
+    if (!r.rows.length) return res.status(404).json({ error: "User not found" });
+    res.json({ success: true, data: r.rows[0] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get all users (admin only)
+app.get("/api/users", auth, roles("super_admin","admin"), async (req, res) => {
+  try {
+    const r = await pool.query("SELECT id, username, email, role, permissions, client_id, supplier_id, name, is_active, last_login FROM users ORDER BY id");
+    res.json({ success: true, data: r.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 // ===================== DASHBOARD =====================
 app.get('/api/dashboard/stats', auth, async (req, res) => {
   const r = await pool.query(`SELECT (SELECT COUNT(*) FROM clients) as tc, (SELECT COUNT(*) FROM clients WHERE status='active') as ac, (SELECT COUNT(*) FROM suppliers) as ts, (SELECT COUNT(*) FROM suppliers WHERE status='active') as asu, (SELECT COUNT(*) FROM sms_logs WHERE submit_time::date=CURRENT_DATE) as sms_t, (SELECT COUNT(*) FROM sms_logs WHERE submit_time::date=CURRENT_DATE AND status='delivered') as del_t, (SELECT COUNT(*) FROM suppliers WHERE bind_status='bound') as ab, (SELECT COUNT(*) FROM suppliers) as tb`);
