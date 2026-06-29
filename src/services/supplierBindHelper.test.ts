@@ -148,6 +148,11 @@ describe('performSupplierBind — success', () => {
       smpp_port: supplier.smpp_port,
       smpp_username: supplier.smpp_username,
       smpp_password: supplier.smpp_password,
+      system_type: '',
+      bind_type: 'trx',
+      addr_ton: 0,
+      addr_npi: 0,
+      addr_range: 'system_id',
       interface_version: 0x34,
     });
     // DB call 2: suppliers → bound

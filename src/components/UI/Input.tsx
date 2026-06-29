@@ -48,12 +48,14 @@ export const Input: React.FC<InputProps> = ({
 interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
   label?: string;
   error?: string;
+  hint?: string;
   options: { value: string; label: string }[];
 }
 
 export const Select: React.FC<SelectProps> = ({
   label,
   error,
+  hint,
   options,
   className = '',
   ...props
@@ -78,6 +80,7 @@ export const Select: React.FC<SelectProps> = ({
           <option key={opt.value} value={opt.value}>{opt.label}</option>
         ))}
       </select>
+      {hint && !error && <p className="text-xs text-gray-500">{hint}</p>}
       {error && <p className="text-xs text-red-500">{error}</p>}
     </div>
   );

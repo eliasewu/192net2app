@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Building2, GitBranch, DollarSign, CreditCard,
   MessageSquare, BarChart3, Megaphone, Radio, FlaskConical, Languages,
-  Bell, UserCog, Settings, ChevronDown, ChevronRight, Smartphone,
+  Bell, UserCog, Settings, ChevronDown, Smartphone,
   Mic, Globe, FileText, Database, Plug, Send, Server, Shield, MapPin, Mail, Wifi, Hash
 } from 'lucide-react';
 

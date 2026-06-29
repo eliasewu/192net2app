@@ -646,10 +646,10 @@ export const AddSupplier: React.FC = () => {
                 options={[{ value: '', label: 'Empty (EIMS/modern)' }, { value: 'CMT', label: 'CMT (legacy)' }, { value: 'SMPP', label: 'SMPP' }, { value: 'VMA', label: 'VMA' }]} hint="SMPP bind system_type — per-SMSC requirement" />
               <Select label="Bind Type" value={formData.smpp_bind_type} onChange={(e) => updateField('smpp_bind_type', e.target.value)}
                 options={[{ value: 'trx', label: 'TRX — Transceiver (default)' }, { value: 'tx', label: 'TX — Transmitter only' }, { value: 'rx', label: 'RX — Receiver only' }]} hint="Some SMSCs require separate TX/RX binds" />
-              <Select label="Address TON" value={formData.smpp_addr_ton} onChange={(e) => updateField('smpp_addr_ton', parseInt(e.target.value))}
-                options={[{ value: 0, label: '0 — Unknown (default)' }, { value: 1, label: '1 — International' }, { value: 2, label: '2 — Network Specific' }, { value: 5, label: '5 — Alphanumeric' }]} />
-              <Select label="Address NPI" value={formData.smpp_addr_npi} onChange={(e) => updateField('smpp_addr_npi', parseInt(e.target.value))}
-                options={[{ value: 0, label: '0 — Unknown (default)' }, { value: 1, label: '1 — ISDN' }]} />
+              <Select label="Address TON" value={String(formData.smpp_addr_ton)} onChange={(e) => updateField('smpp_addr_ton', parseInt(e.target.value))}
+                options={[{ value: '0', label: '0 — Unknown (default)' }, { value: '1', label: '1 — International' }, { value: '2', label: '2 — Network Specific' }, { value: '5', label: '5 — Alphanumeric' }]} />
+              <Select label="Address NPI" value={String(formData.smpp_addr_npi)} onChange={(e) => updateField('smpp_addr_npi', parseInt(e.target.value))}
+                options={[{ value: '0', label: '0 — Unknown (default)' }, { value: '1', label: '1 — ISDN' }]} />
               <Select label="Address Range" value={formData.smpp_addr_range} onChange={(e) => updateField('smpp_addr_range', e.target.value)}
                 options={[{ value: 'system_id', label: 'system_id (username)' }, { value: '', label: 'Empty string' }, { value: 'null', label: 'Null (no restriction)' }]} hint="Address range in bind PDU" />
             </div>
