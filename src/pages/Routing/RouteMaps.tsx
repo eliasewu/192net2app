@@ -1,68 +1,23 @@
 import React, { useState } from 'react';
-import { Plus, Search, Edit, Trash2, GitBranch } from 'lucide-react';
+import { Plus, Search, Edit, Trash2, GitBranch, Download } from 'lucide-react';
 import { useData } from '../../store/DataContext';
 import { Card } from '../../components/UI/Card';
 import { Button } from '../../components/UI/Button';
 import { Badge } from '../../components/UI/Badge';
+import { exportCSV, exportExcel } from '../../services/exportService';
 import { Modal } from '../../components/UI/Modal';
 import { Input, Select } from '../../components/UI/Input';
-
-interface RouteMapEntry {
-  id: string;
-  client_id: string;
-  route_id: string;
-  supplier_id: string;
-  mccmnc_pattern: string;
-  priority: number;
-  percentage: number;
-  is_active: boolean;
-  created_at: string;
-}
+import { useToast } from '../../components/UI/Toast';
 
 export const RouteMaps: React.FC = () => {
-  const { clients, routes, suppliers, getSupplierById } = useData();
-  
-  // Mock route maps data
-  const [routeMaps, setRouteMaps] = useState<RouteMapEntry[]>([
-    {
-      id: '1',
-      client_id: '1',
-      route_id: '1',
-      supplier_id: '1',
-      mccmnc_pattern: '310*',
-      priority: 1,
-      percentage: 100,
-      is_active: true,
-      created_at: '2024-01-15',
-    },
-    {
-      id: '2',
-      client_id: '1',
-      route_id: '2',
-      supplier_id: '3',
-      mccmnc_pattern: '234*',
-      priority: 2,
-      percentage: 100,
-      is_active: true,
-      created_at: '2024-01-20',
-    },
-    {
-      id: '3',
-      client_id: '2',
-      route_id: '1',
-      supplier_id: '2',
-      mccmnc_pattern: '*',
-      priority: 1,
-      percentage: 70,
-      is_active: true,
-      created_at: '2024-02-01',
-    },
-  ]);
-
+  const { clients, routes, suppliers, getSupplierById, routeMaps, addRouteMap, updateRouteMap, deleteRouteMap } = useData();
+  const { addToast } = useToast();
   const [search, setSearch] = useState('');
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
   const [clientFilter, setClientFilter] = useState<string>('all');
   const [showModal, setShowModal] = useState(false);
-  const [editingMap, setEditingMap] = useState<RouteMapEntry | null>(null);
+  const [editingMap, setEditingMap] = useState<typeof routeMaps[0] | null>(null);
 
   const [formData, setFormData] = useState({
     client_id: '',
@@ -94,7 +49,7 @@ export const RouteMaps: React.FC = () => {
     return supplier ? `${supplier.supplier_code} - ${supplier.company_name}` : 'Unknown';
   };
 
-  const openModal = (map?: RouteMapEntry) => {
+  const openModal = (map?: typeof routeMaps[0]) => {
     if (map) {
       setEditingMap(map);
       setFormData({
@@ -121,24 +76,30 @@ export const RouteMaps: React.FC = () => {
     setShowModal(true);
   };
 
-  const handleSubmit = () => {
-    if (editingMap) {
-      setRouteMaps(prev => prev.map(m =>
-        m.id === editingMap.id ? { ...m, ...formData } : m
-      ));
-    } else {
-      const newMap: RouteMapEntry = {
-        id: Date.now().toString(),
-        ...formData,
-        created_at: new Date().toISOString().split('T')[0],
-      };
-      setRouteMaps(prev => [...prev, newMap]);
+  const handleSubmit = async () => {
+    try {
+      if (editingMap) {
+        await updateRouteMap(editingMap.id, formData);
+      } else {
+        await addRouteMap({ ...formData });
+      }
+      setShowModal(false);
+    } catch (e: any) {
+      addToast('error', `Failed to save route map: ${e?.message || e}`);
     }
-    setShowModal(false);
   };
 
-  const handleDelete = (id: string) => {
-    setRouteMaps(prev => prev.filter(m => m.id !== id));
+  const handleDelete = async (id: string) => {
+    if (!confirm('Delete this route map?')) return;
+    setDeletingId(id);
+    try {
+      await deleteRouteMap(id);
+      addToast('success', 'Route map deleted successfully');
+    } catch (e: any) {
+      addToast('error', 'Failed to delete route map: ' + (e?.message || 'Unknown error'));
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   // Group maps by client for visual display
@@ -155,9 +116,13 @@ export const RouteMaps: React.FC = () => {
           <h1 className="text-2xl font-bold text-gray-800">Route Maps</h1>
           <p className="text-gray-500 mt-1">Configure client-specific routing to suppliers</p>
         </div>
-        <Button icon={<Plus size={18} />} onClick={() => openModal()}>
-          Add Route Map
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="secondary" icon={<Download size={16}/>} onClick={()=>exportCSV('route_maps_export.csv',['Client','MCCMNC Pattern','Route','Supplier','Priority','Percentage','Active'],filteredMaps.map(m=>[clients.find(c=>c.id===m.client_id)?.company_name||'',m.mccmnc_pattern,getRouteName(m.route_id),getSupplierName(m.supplier_id),String(m.priority),String(m.percentage),m.is_active?'Yes':'No']))}>Export CSV</Button>
+          <Button variant="secondary" icon={<Download size={16}/>} onClick={()=>exportExcel('route_maps_export.xlsx','Route Maps',['Client','MCCMNC Pattern','Route','Supplier','Priority','Percentage','Active'],filteredMaps.map(m=>[clients.find(c=>c.id===m.client_id)?.company_name||'',m.mccmnc_pattern,getRouteName(m.route_id),getSupplierName(m.supplier_id),String(m.priority),String(m.percentage),m.is_active?'Yes':'No']))}>Export Excel</Button>
+          <Button icon={<Plus size={18} />} onClick={() => openModal()}>
+            Add Route Map
+          </Button>
+        </div>
       </div>
 
       {/* Info Box */}
@@ -293,8 +258,9 @@ export const RouteMaps: React.FC = () => {
                       <button
                         onClick={() => handleDelete(map.id)}
                         className="p-1.5 rounded hover:bg-white"
+                        disabled={deletingId === map.id}
                       >
-                        <Trash2 size={16} className="text-red-500" />
+                        <Trash2 size={16} className={`text-red-500 ${deletingId === map.id ? 'opacity-50' : ''}`} />
                       </button>
                     </div>
                   </div>

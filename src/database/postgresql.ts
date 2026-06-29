@@ -52,6 +52,7 @@ export const TABLES = {
     webhook_url TEXT,
     force_dlr BOOLEAN DEFAULT false,
     dlr_timeout INTEGER DEFAULT 150,
+    force_dlr_timeout_mode VARCHAR(20) DEFAULT 'fixed',
     routing_plan_id INTEGER REFERENCES route_plans(id),
     status VARCHAR(20) DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -79,6 +80,9 @@ export const TABLES = {
     currency VARCHAR(3) DEFAULT 'EUR',
     bind_status VARCHAR(20) DEFAULT 'unbound',
     consecutive_failures INTEGER DEFAULT 0,
+    force_dlr BOOLEAN DEFAULT false,
+    dlr_timeout INTEGER DEFAULT 150,
+    force_dlr_timeout_mode VARCHAR(20) DEFAULT 'fixed',
     status VARCHAR(20) DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

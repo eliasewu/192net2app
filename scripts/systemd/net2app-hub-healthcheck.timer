@@ -1,0 +1,31 @@
+# ============================================================
+# /etc/systemd/system/net2app-hub-healthcheck.timer
+# ------------------------------------------------------------
+# Fires net2app-hub-healthcheck.service once per minute.
+#
+#   OnBootSec=1min          → first run 60s after boot
+#   OnUnitInactiveSec=1min  → cadence 60s after LAST COMPLETION
+#                             (not last activation), so a slow
+#                             probe at t=0 still triggers the
+#                             next at t≈60, not t≪60
+#   AccuracySec=5           → allow ±5s jitter so we don't pin
+#                             to a wallclock second
+#   Persistent=true         → catch up missed runs after long
+#                             downtime / clock jumps
+#
+# This timer is the system of record; the service unit's
+# Restart=no ensures the timer is the only loop source.
+# ============================================================
+
+[Unit]
+Description=NET2APP Hub — run health probe every minute
+Requires=net2app-hub-healthcheck.service
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=1min
+AccuracySec=5
+Persistent=true
+
+[Install]
+WantedBy=timers.target

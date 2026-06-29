@@ -1,0 +1,54 @@
+#!/bin/bash
+# ============================================================
+# scripts/pre-commit — git pre-commit hook for NET2APP Hub
+# ============================================================
+# Runs the full test cycle before allowing a commit:
+#   1. npm test        (vitest run — frontend unit tests)
+#   2. npx tsc --noEmit (TypeScript compile check, no JS out)
+#   3. bash scripts/smoke.sh (backend CRUD + DB parity smoke)
+#
+# Escape hatches:
+#   - git commit --no-verify                       → bypasses this hook entirely (git's standard)
+#   - SKIP_SMOKE=1 git commit ...                  → skip the backend smoke (front-end only changes)
+#   - SKIP_TSC=1   git commit ...                  → skip the typecheck (WIP commits with intentional TS errors)
+#   - SKIP_TESTS=1 git commit ...                  → skip vitest (cosmetic-only changes)
+#
+# Why these phases: vitest catches unit-test regressions in src/, tsc catches
+# type drift across the codebase, and smoke.sh proves the backend still round-trips
+# (login → CRUD → DB parity) before any commit lands. Smoke is the slowest phase
+# (~30s on a healthy backend) so the SKIP_SMOKE bypass exists for fast iteration.
+#
+# Short-circuit behavior: any phase failing aborts the rest of the hook via
+# `set -e` — git will reject the commit. Run with `bash -x scripts/pre-commit`
+# to see which phase blew up if a commit ever gets rejected.
+# ============================================================
+
+set -e
+
+cd "$(git rev-parse --show-toplevel)"
+
+# Phase 1: vitest
+if [ -z "${SKIP_TESTS:-}" ]; then
+  echo '[pre-commit] (1/3) npm test...'
+  npm test --silent
+else
+  echo '[pre-commit] (1/3) SKIP_TESTS set — skipping vitest'
+fi
+
+# Phase 2: tsc --noEmit
+if [ -z "${SKIP_TSC:-}" ]; then
+  echo '[pre-commit] (2/3) tsc --noEmit...'
+  npx tsc --noEmit
+else
+  echo '[pre-commit] (2/3) SKIP_TSC set — skipping typecheck'
+fi
+
+# Phase 3: backend smoke
+if [ -z "${SKIP_SMOKE:-}" ]; then
+  echo '[pre-commit] (3/3) backend smoke...'
+  bash scripts/smoke.sh
+else
+  echo '[pre-commit] (3/3) SKIP_SMOKE set — skipping backend smoke'
+fi
+
+echo '[pre-commit] ✅ all phases passed'

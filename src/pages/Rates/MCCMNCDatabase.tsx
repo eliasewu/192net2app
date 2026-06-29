@@ -30,6 +30,7 @@ export const MCCMNCDatabase: React.FC = () => {
   const [importText, setImportText] = useState('');
   const [importResult, setImportResult] = useState<{added:number;skipped:number;errors:string[]} | null>(null);
   const [selectedEntries, setSelectedEntries] = useState<string[]>([]);
+  const [deleting, setDeleting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [formData, setFormData] = useState({ country:'', country_code:'', mcc:'', mnc:'', operator:'', network_type:'GSM', status:'active' as 'active'|'inactive' });
@@ -56,7 +57,7 @@ export const MCCMNCDatabase: React.FC = () => {
     setShowModal(false);
   };
 
-  const handleDelete = () => { if (deleteModal) { deleteMCCMNC(deleteModal.id); setDeleteModal(null); } };
+  const handleDelete = () => { if (deleteModal) { setDeleting(true); try { deleteMCCMNC(deleteModal.id); setDeleteModal(null); } finally { setDeleting(false); } } };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -164,7 +165,7 @@ export const MCCMNCDatabase: React.FC = () => {
 
       {/* Table */}
       <Card noPadding>
-        <Table columns={columns} data={paginatedMCCMNC} keyExtractor={e=>e.id}/>
+        <Table columns={columns} data={paginatedMCCMNC} keyExtractor={e=>e.id} />
         <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} totalItems={filteredMCCMNC.length} itemsPerPage={itemsPerPage}/>
       </Card>
 
@@ -182,7 +183,7 @@ export const MCCMNCDatabase: React.FC = () => {
       </Modal>
 
       {/* Delete Modal */}
-      <Modal isOpen={!!deleteModal} onClose={()=>setDeleteModal(null)} title="Delete Entry" footer={<div className="flex justify-end gap-3"><Button variant="secondary" onClick={()=>setDeleteModal(null)}>Cancel</Button><Button variant="danger" onClick={handleDelete}>Delete</Button></div>}>
+      <Modal isOpen={!!deleteModal} onClose={()=>setDeleteModal(null)} title="Delete Entry" footer={<div className="flex justify-end gap-3"><Button variant="secondary" onClick={()=>setDeleteModal(null)}>Cancel</Button><Button variant="danger" onClick={handleDelete} disabled={deleting} loading={deleting}>Delete</Button></div>}>
         <p className="text-gray-600">Delete <strong>{deleteModal?.operator}</strong> ({deleteModal?.mcc}{deleteModal?.mnc})?</p>
       </Modal>
 

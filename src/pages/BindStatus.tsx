@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Wifi, WifiOff, RefreshCw, AlertTriangle, Clock } from 'lucide-react';
+import { Wifi, WifiOff, RefreshCw, AlertTriangle, Clock, ArrowRight } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useData } from '../store/DataContext';
 import { Card } from '../components/UI/Card';
 import { Button } from '../components/UI/Button';
 import { Badge } from '../components/UI/Badge';
 
 export const BindStatus: React.FC = () => {
+  const navigate = useNavigate();
   const { suppliers, updateSupplier, clients } = useData();
   const [lastRefresh, setLastRefresh] = useState(new Date());
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -137,6 +139,28 @@ export const BindStatus: React.FC = () => {
         </div>
       </div>
 
+      {/* Unbound / Broken warning banner */}
+      {(() => {
+        const unbound = suppliers.filter(s => s.bind_status !== 'bound' && s.status === 'active');
+        const blocked = suppliers.filter(s => s.consecutive_failures >= 20);
+        if (unbound.length === 0 && blocked.length === 0) return null;
+        return (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col md:flex-row items-start md:items-center gap-4">
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <AlertTriangle size={20} className="text-amber-600" />
+              <span className="font-semibold text-amber-800 text-sm">Connection Issues</span>
+            </div>
+            <div className="flex-1 text-sm text-amber-700">
+              {unbound.length > 0 && <span>{unbound.length} supplier{unbound.length !== 1 ? 's' : ''} unbound. </span>}
+              {blocked.length > 0 && <span>{blocked.length} supplier{blocked.length !== 1 ? 's' : ''} blocked.</span>}
+            </div>
+            <div className="flex gap-2 flex-shrink-0">
+              <Button variant="secondary" size="sm" onClick={() => navigate('/suppliers')} icon={<ArrowRight size={14} />}>View Suppliers</Button>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Client Bind Status */}
       <Card title="Client Bind Status" subtitle={`${clients.length} clients — Green = has route + bound supplier, Red = no route or no bound supplier`}>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -195,80 +219,117 @@ export const BindStatus: React.FC = () => {
 
       {/* Supplier Bind Status - SMPP */}
       <Card title="Supplier — SMPP / HTTP Connections" subtitle={`${smppSuppliers.length} connections`}>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {smppSuppliers.map(supplier => (
-            <div key={supplier.id}
-              className={`p-4 rounded-xl border-2 transition-all ${
-                supplier.bind_status === 'bound' ? 'border-green-200 bg-green-50' :
-                supplier.bind_status === 'error' || supplier.consecutive_failures >= 20 ? 'border-red-200 bg-red-50' :
-                'border-red-200 bg-red-50'
-              }`}>
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
-                  {getStatusIcon(supplier.bind_status)}
-                  <div>
-                    <p className="font-semibold text-gray-800 text-sm">{supplier.supplier_code}</p>
-                    <p className="text-xs text-gray-600">{supplier.company_name}</p>
+        {smppSuppliers.length === 0 ? (
+          <div className="text-center py-8 text-gray-500">
+            <span className="text-4xl">🔌</span>
+            <p className="mt-2">No SMPP/HTTP suppliers configured</p>
+            <p className="text-xs mt-1 mb-4">Add a supplier to monitor its connection status here</p>
+            <Button variant="secondary" size="sm" onClick={() => navigate('/suppliers/add')}>
+              <ArrowRight size={14} className="mr-1" /> Add Supplier
+            </Button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {smppSuppliers.map(supplier => (
+              <div key={supplier.id}
+                className={`p-4 rounded-xl border-2 transition-all ${
+                  supplier.bind_status === 'bound' ? 'border-green-200 bg-green-50' :
+                  supplier.bind_status === 'error' || supplier.consecutive_failures >= 20 ? 'border-red-200 bg-red-50' :
+                  'border-red-200 bg-red-50'
+                }`}>
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-3">
+                    {getStatusIcon(supplier.bind_status)}
+                    <div>
+                      <p className="font-semibold text-gray-800 text-sm">{supplier.supplier_code}</p>
+                      <p className="text-xs text-gray-600">{supplier.company_name}</p>
+                    </div>
+                  </div>
+                  {getStatusBadge(supplier.bind_status, supplier.consecutive_failures)}
+                </div>
+                <div className="mt-3 space-y-1.5 text-xs">
+                  <div className="flex justify-between"><span className="text-gray-500">Type:</span><span className="font-medium text-gray-700">{supplier.connection_type.toUpperCase()}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Host:</span><span className="font-mono text-gray-700">{supplier.smpp_host || 'N/A'}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Port:</span><span className="font-mono text-gray-700">{supplier.smpp_port || 'N/A'}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Failures:</span>
+                    <span className={`font-medium ${supplier.consecutive_failures > 10 ? 'text-red-600' : supplier.consecutive_failures > 0 ? 'text-yellow-600' : 'text-green-600'}`}>{supplier.consecutive_failures}</span>
                   </div>
                 </div>
-                {getStatusBadge(supplier.bind_status, supplier.consecutive_failures)}
-              </div>
-              <div className="mt-3 space-y-1.5 text-xs">
-                <div className="flex justify-between"><span className="text-gray-500">Type:</span><span className="font-medium text-gray-700">{supplier.connection_type.toUpperCase()}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">Host:</span><span className="font-mono text-gray-700">{supplier.smpp_host || 'N/A'}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">Port:</span><span className="font-mono text-gray-700">{supplier.smpp_port || 'N/A'}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">Failures:</span>
-                  <span className={`font-medium ${supplier.consecutive_failures > 10 ? 'text-red-600' : supplier.consecutive_failures > 0 ? 'text-yellow-600' : 'text-green-600'}`}>{supplier.consecutive_failures}</span>
+                <div className="mt-3 flex gap-2">
+                  {supplier.bind_status === 'bound' ? (
+                    <Button size="sm" variant="danger" className="flex-1" onClick={() => handleDisconnect(supplier.id)}>Disconnect</Button>
+                  ) : (
+                    <>
+                      <Button size="sm" variant="success" className="flex-1" onClick={() => handleReconnect(supplier.id)}>Reconnect</Button>
+                      <Button size="sm" variant="secondary" onClick={() => navigate(`/suppliers/${supplier.id}/edit`)} title="Edit config">
+                        <ArrowRight size={14} />
+                      </Button>
+                    </>
+                  )}
                 </div>
               </div>
-              <div className="mt-3 flex gap-2">
-                {supplier.bind_status === 'bound' ? (
-                  <Button size="sm" variant="danger" className="flex-1" onClick={() => handleDisconnect(supplier.id)}>Disconnect</Button>
-                ) : (
-                  <Button size="sm" variant="success" className="flex-1" onClick={() => handleReconnect(supplier.id)}>Reconnect</Button>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </Card>
 
       {/* Supplier Bind Status - OTT */}
       <Card title="Supplier — OTT Connections (WhatsApp / Telegram)" subtitle={`${ottSuppliers.length} connections`}>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {ottSuppliers.map(supplier => (
-            <div key={supplier.id}
-              className={`p-4 rounded-xl border-2 transition-all ${
-                supplier.bind_status === 'bound' ? 'border-green-200 bg-green-50' :
-                supplier.bind_status === 'error' ? 'border-red-200 bg-red-50' :
-                'border-red-200 bg-red-50'
-              }`}>
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
-                  <div className={`p-2 rounded-lg ${supplier.connection_type === 'ott_whatsapp' ? 'bg-green-500' : 'bg-blue-500'}`}>
-                    <span className="text-white text-lg">{supplier.connection_type === 'ott_whatsapp' ? '📱' : '✈️'}</span>
-                  </div>
-                  <div>
-                    <p className="font-semibold text-gray-800 text-sm">{supplier.supplier_code}</p>
-                    <p className="text-xs text-gray-600">{supplier.company_name}</p>
-                  </div>
-                </div>
-                {getStatusBadge(supplier.bind_status, supplier.consecutive_failures)}
-              </div>
-              <div className="mt-3 space-y-1.5 text-xs">
-                <div className="flex justify-between"><span className="text-gray-500">Platform:</span><span className="font-medium text-gray-700">{supplier.connection_type === 'ott_whatsapp' ? 'WhatsApp' : 'Telegram'}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">Status:</span><span className={`font-medium ${supplier.bind_status === 'bound' ? 'text-green-600' : 'text-red-600'}`}>{supplier.bind_status === 'bound' ? 'Connected' : 'Disconnected'}</span></div>
-              </div>
-              <div className="mt-3 flex gap-2">
-                {supplier.bind_status === 'bound' ? (
-                  <Button size="sm" variant="danger" className="flex-1" onClick={() => handleDisconnect(supplier.id)}>Disconnect</Button>
-                ) : (
-                  <Button size="sm" variant="success" className="flex-1" onClick={() => handleReconnect(supplier.id)}>Connect</Button>
-                )}
-              </div>
+        {ottSuppliers.length === 0 ? (
+          <div className="text-center py-8 text-gray-500">
+            <span className="text-4xl">📱</span>
+            <p className="mt-2">No WhatsApp/Telegram suppliers configured</p>
+            <p className="text-xs mt-1 mb-4">Pair OTT devices then add an OTT supplier to monitor here</p>
+            <div className="flex items-center justify-center gap-2">
+              <Button variant="secondary" size="sm" onClick={() => navigate('/suppliers/social-api')}>
+                <ArrowRight size={14} className="mr-1" /> Social API
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => navigate('/business-api-connect')}>
+                <ArrowRight size={14} className="mr-1" /> Business API
+              </Button>
             </div>
-          ))}
-        </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {ottSuppliers.map(supplier => (
+              <div key={supplier.id}
+                className={`p-4 rounded-xl border-2 transition-all ${
+                  supplier.bind_status === 'bound' ? 'border-green-200 bg-green-50' :
+                  supplier.bind_status === 'error' ? 'border-red-200 bg-red-50' :
+                  'border-red-200 bg-red-50'
+                }`}>
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-lg ${supplier.connection_type === 'ott_whatsapp' ? 'bg-green-500' : 'bg-blue-500'}`}>
+                      <span className="text-white text-lg">{supplier.connection_type === 'ott_whatsapp' ? '📱' : '✈️'}</span>
+                    </div>
+                    <div>
+                      <p className="font-semibold text-gray-800 text-sm">{supplier.supplier_code}</p>
+                      <p className="text-xs text-gray-600">{supplier.company_name}</p>
+                    </div>
+                  </div>
+                  {getStatusBadge(supplier.bind_status, supplier.consecutive_failures)}
+                </div>
+                <div className="mt-3 space-y-1.5 text-xs">
+                  <div className="flex justify-between"><span className="text-gray-500">Platform:</span><span className="font-medium text-gray-700">{supplier.connection_type === 'ott_whatsapp' ? 'WhatsApp' : 'Telegram'}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Status:</span><span className={`font-medium ${supplier.bind_status === 'bound' ? 'text-green-600' : 'text-red-600'}`}>{supplier.bind_status === 'bound' ? 'Connected' : 'Disconnected'}</span></div>
+                </div>
+                <div className="mt-3 flex gap-2">
+                  {supplier.bind_status === 'bound' ? (
+                    <Button size="sm" variant="danger" className="flex-1" onClick={() => handleDisconnect(supplier.id)}>Disconnect</Button>
+                  ) : (
+                    <>
+                      <Button size="sm" variant="success" className="flex-1" onClick={() => handleReconnect(supplier.id)}>Connect</Button>
+                      <Button size="sm" variant="secondary" onClick={() => navigate(`/suppliers/${supplier.id}/edit`)} title="Edit config">
+                        <ArrowRight size={14} />
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </Card>
 
       {/* Routing Flow Diagram */}

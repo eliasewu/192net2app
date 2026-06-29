@@ -1,21 +1,36 @@
-import React, { useState } from 'react';
-import { Plus, Search, Edit, Trash2, MoreVertical, Power } from 'lucide-react';
+import React, { useState, useCallback } from 'react';
+import { Plus, Search, Edit, Trash2, MoreVertical, Power, Download, Globe } from 'lucide-react';
 import { useData } from '../../store/DataContext';
 import { Card } from '../../components/UI/Card';
 import { Button } from '../../components/UI/Button';
 import { Badge } from '../../components/UI/Badge';
+import { exportCSV, exportExcel } from '../../services/exportService';
 import { Table } from '../../components/UI/Table';
 import { Modal } from '../../components/UI/Modal';
 import { Input, Select } from '../../components/UI/Input';
+import { useToast } from '../../components/UI/Toast';
+import { api } from '../../services/api';
 import { Trunk, TrunkType } from '../../types';
+
+interface IPEntry {
+  id: number;
+  ip_address: string;
+  list_type: string;
+  notes: string | null;
+  trunk_id: number | null;
+  created_by: string | null;
+  created_at: string;
+}
 
 export const TrunksList: React.FC = () => {
   const { trunks, suppliers, addTrunk, updateTrunk, deleteTrunk, getSupplierById } = useData();
+  const { addToast } = useToast();
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingTrunk, setEditingTrunk] = useState<Trunk | null>(null);
   const [deleteModal, setDeleteModal] = useState<Trunk | null>(null);
   const [actionMenu, setActionMenu] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const [formData, setFormData] = useState({
     trunk_name: '',
@@ -26,6 +41,39 @@ export const TrunksList: React.FC = () => {
     is_active: true,
     mccmnc_allowed: ['*'],
   });
+
+  // IP list modal state
+  const [ipModalTrunk, setIpModalTrunk] = useState<Trunk | null>(null);
+  const [ipEntries, setIpEntries] = useState<IPEntry[]>([]);
+  const [ipLoading, setIpLoading] = useState(false);
+
+  const fetchTrunkIPs = useCallback(async (trunkId: string) => {
+    setIpLoading(true);
+    try {
+      const res = await api.get(`/ip-lists?trunk_id=${trunkId}`);
+      setIpEntries(Array.isArray(res.data) ? res.data : []);
+    } catch (e) {
+      console.error('Failed to fetch IP entries:', e);
+    } finally {
+      setIpLoading(false);
+    }
+  }, []);
+
+  const openIpModal = (trunk: Trunk) => {
+    setIpModalTrunk(trunk);
+    fetchTrunkIPs(trunk.id);
+  };
+
+  const getListTypeBadge = (listType: string) => {
+    const map: Record<string, { label: string; variant: 'default' | 'success' | 'warning' | 'danger' | 'info' | 'purple' }> = {
+      unaudited: { label: 'Unaudited', variant: 'warning' },
+      blacklist: { label: 'Blacklisted', variant: 'danger' },
+      whitelist: { label: 'Whitelisted', variant: 'success' },
+      web_login_blacklist: { label: 'Web Login Block', variant: 'purple' },
+    };
+    const config = map[listType] || { label: listType, variant: 'default' as const };
+    return <Badge variant={config.variant} size="sm">{config.label}</Badge>;
+  };
 
   const filteredTrunks = trunks.filter(trunk =>
     trunk.trunk_name.toLowerCase().includes(search.toLowerCase())
@@ -84,10 +132,18 @@ export const TrunksList: React.FC = () => {
     setShowModal(false);
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (deleteModal) {
-      deleteTrunk(deleteModal.id);
-      setDeleteModal(null);
+      setDeleting(true);
+      try {
+        await deleteTrunk(deleteModal.id);
+        addToast('success', 'Trunk deleted successfully');
+        setDeleteModal(null);
+      } catch (e: any) {
+        addToast('error', 'Failed to delete trunk: ' + (e?.message || 'Unknown error'));
+      } finally {
+        setDeleting(false);
+      }
     }
   };
 
@@ -148,6 +204,20 @@ export const TrunksList: React.FC = () => {
             <Badge variant="default" size="sm">+{trunk.mccmnc_allowed.length - 3}</Badge>
           )}
         </div>
+      ),
+    },
+    {
+      key: 'ips',
+      header: 'IPs',
+      align: 'center' as const,
+      render: (trunk: Trunk) => (
+        <button
+          onClick={(e) => { e.stopPropagation(); openIpModal(trunk); }}
+          className="text-blue-600 hover:text-blue-800 font-medium text-sm underline underline-offset-2"
+          title="View associated IPs"
+        >
+          View IPs
+        </button>
       ),
     },
     {
@@ -222,7 +292,11 @@ export const TrunksList: React.FC = () => {
           <h1 className="text-2xl font-bold text-gray-800">Trunks</h1>
           <p className="text-gray-500 mt-1">Manage supplier trunk configurations</p>
         </div>
-        <Button icon={<Plus size={18} />} onClick={() => openModal()}>Add Trunk</Button>
+        <div className="flex gap-2">
+          <Button variant="secondary" icon={<Download size={16}/>} onClick={()=>exportCSV('trunks_export.csv',['Trunk Name','ID','Type','Supplier','Priority','Percentage','MCCMNC Allowed','Active'],filteredTrunks.map(t=>[t.trunk_name,t.id,t.trunk_type,(getSupplierById(t.supplier_id)?.company_name||'')+' ('+(getSupplierById(t.supplier_id)?.supplier_code||'')+')',String(t.priority),String(t.percentage),t.mccmnc_allowed.join(', '),t.is_active?'Yes':'No']))}>Export CSV</Button>
+          <Button variant="secondary" icon={<Download size={16}/>} onClick={()=>exportExcel('trunks_export.xlsx','Trunks',['Trunk Name','ID','Type','Supplier','Priority','Percentage','MCCMNC Allowed','Active'],filteredTrunks.map(t=>[t.trunk_name,t.id,t.trunk_type,(getSupplierById(t.supplier_id)?.company_name||'')+' ('+(getSupplierById(t.supplier_id)?.supplier_code||'')+')',String(t.priority),String(t.percentage),t.mccmnc_allowed.join(', '),t.is_active?'Yes':'No']))}>Export Excel</Button>
+          <Button icon={<Plus size={18} />} onClick={() => openModal()}>Add Trunk</Button>
+        </div>
       </div>
 
       {/* Stats */}
@@ -271,6 +345,7 @@ export const TrunksList: React.FC = () => {
           columns={columns}
           data={filteredTrunks}
           keyExtractor={(trunk) => trunk.id}
+          
         />
       </Card>
 
@@ -368,7 +443,7 @@ export const TrunksList: React.FC = () => {
         footer={
           <div className="flex justify-end gap-3">
             <Button variant="secondary" onClick={() => setDeleteModal(null)}>Cancel</Button>
-            <Button variant="danger" onClick={handleDelete}>Delete Trunk</Button>
+            <Button variant="danger" onClick={handleDelete} disabled={deleting} loading={deleting}>Delete Trunk</Button>
           </div>
         }
       >
@@ -376,6 +451,57 @@ export const TrunksList: React.FC = () => {
           Are you sure you want to delete <strong>{deleteModal?.trunk_name}</strong>? 
           This action cannot be undone.
         </p>
+      </Modal>
+
+      {/* IP List Modal */}
+      <Modal
+        isOpen={!!ipModalTrunk}
+        onClose={() => { setIpModalTrunk(null); setIpEntries([]); }}
+        title={ipModalTrunk ? `IPs for ${ipModalTrunk.trunk_name}` : 'Trunk IPs'}
+        size="lg"
+        footer={
+          <div className="flex justify-end">
+            <Button variant="secondary" onClick={() => { setIpModalTrunk(null); setIpEntries([]); }}>Close</Button>
+          </div>
+        }
+      >
+        {ipLoading ? (
+          <div className="py-8 text-center text-gray-500">Loading IPs...</div>
+        ) : ipEntries.length === 0 ? (
+          <div className="py-8 text-center">
+            <Globe size={32} className="mx-auto mb-2 text-gray-300" />
+            <p className="text-gray-500">No IPs associated with this trunk.</p>
+            <p className="text-xs text-gray-400 mt-1">Go to IP List to assign IPs to trunks.</p>
+          </div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 border-b">
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">IP Address</th>
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">List Type</th>
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Notes</th>
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Added By</th>
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {ipEntries.map(ip => (
+                <tr key={ip.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-2.5">
+                    <span className="font-mono text-xs">{ip.ip_address}</span>
+                  </td>
+                  <td className="px-4 py-2.5">{getListTypeBadge(ip.list_type)}</td>
+                  <td className="px-4 py-2.5 text-gray-600 max-w-xs truncate">{ip.notes || '—'}</td>
+                  <td className="px-4 py-2.5 text-gray-500 text-xs">{ip.created_by || 'system'}</td>
+                  <td className="px-4 py-2.5 text-gray-500 text-xs">{new Date(ip.created_at).toLocaleDateString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {ipEntries.length > 0 && (
+          <p className="text-xs text-gray-400 mt-3">{ipEntries.length} IP{ipEntries.length !== 1 ? 's' : ''} associated</p>
+        )}
       </Modal>
     </div>
   );

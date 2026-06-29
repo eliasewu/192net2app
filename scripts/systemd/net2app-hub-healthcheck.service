@@ -1,0 +1,40 @@
+# ============================================================
+# /etc/systemd/system/net2app-hub-healthcheck.service
+# ------------------------------------------------------------
+# Oneshot unit invoked by net2app-hub-healthcheck.timer. Runs
+# the healthcheck.sh probe; on probe failure the script calls
+# `systemctl restart net2app-hub` itself. We keep this unit
+# dummy-simple so the timer cadence is exactly what we declare.
+#
+# Type=oneshot + Restart=no (the default) is critical: the
+# *timer* is the loop, not the service. If the service itself
+# retried, the cadence would drift and we'd lose flap protection.
+# ============================================================
+
+[Unit]
+Description=NET2APP Hub — health probe and self-heal restart
+Documentation=file:///opt/net2app-hub/scripts/healthcheck.sh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Explicit even though it's the oneshot default — the loop is
+# the *timer* (net2app-hub-healthcheck.timer), so this service
+# MUST NOT self-restart or we'd lose the 1-min cadence and the
+# flap-protection cooldown in healthcheck.sh would be defeated.
+Restart=no
+# Run as root: healthcheck.sh needs to invoke `systemctl restart
+# net2app-hub`, which is restricted to root. Tightening this with
+# a sudoers NOPASSWD stanza for a non-root user would add policy
+# surface without removing any privilege, so we keep root.
+User=root
+ExecStart=/opt/net2app-hub/scripts/healthcheck.sh
+# Send probe / restart output to journald (default for sysv
+# services anyway) so journalctl -u net2app-hub-healthcheck
+# captures activity even when /var/log is full.
+StandardOutput=journal
+StandardError=journal
+# Cap execution so a bad script (or a hung curl) can't pin the
+# timer or stall boot. Probe timeout is 5s; pad to 30s for safety.
+TimeoutStartSec=30

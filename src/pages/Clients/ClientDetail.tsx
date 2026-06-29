@@ -7,12 +7,15 @@ import { Button } from '../../components/UI/Button';
 import { Badge } from '../../components/UI/Badge';
 import { Modal } from '../../components/UI/Modal';
 import { Input } from '../../components/UI/Input';
+import { useToast } from '../../components/UI/Toast';
 
 export const ClientDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { getClientById, updateClient, deleteClient, smsLogs, invoices, routePlans } = useData();
+  const { addToast } = useToast();
   const client = id ? getClientById(id) : undefined;
+  const [deleting, setDeleting] = useState(false);
   const [showTopup, setShowTopup] = useState(false);
   const [topupAmount, setTopupAmount] = useState(1000);
   const [activeTab, setActiveTab] = useState<'overview' | 'cdr' | 'usage' | 'payments'>('overview');
@@ -39,10 +42,18 @@ export const ClientDetail: React.FC = () => {
     setShowTopup(false);
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (window.confirm('Are you sure you want to delete this client?')) {
-      deleteClient(client.id);
-      navigate('/clients');
+      setDeleting(true);
+      try {
+        await deleteClient(client.id);
+        addToast('success', 'Client deleted successfully');
+        navigate('/clients');
+      } catch (e: any) {
+        addToast('error', 'Failed to delete client: ' + (e?.message || 'Unknown error'));
+      } finally {
+        setDeleting(false);
+      }
     }
   };
 
@@ -74,7 +85,7 @@ export const ClientDetail: React.FC = () => {
         <div className="flex gap-2">
           <Button variant="secondary" icon={<Edit size={16} />} onClick={() => navigate(`/clients/${client.id}/edit`)}>Edit</Button>
           <Button variant="secondary" icon={<Send size={16} />} onClick={() => {}}>Send Welcome Email</Button>
-          <Button variant="danger" icon={<Trash2 size={16} />} onClick={handleDelete}>Delete</Button>
+          <Button variant="danger" icon={<Trash2 size={16} />} onClick={handleDelete} disabled={deleting} loading={deleting}>Delete</Button>
         </div>
       </div>
 
@@ -149,6 +160,7 @@ export const ClientDetail: React.FC = () => {
               <div><p className="text-gray-500">Billing Mode</p><Badge variant={client.billing_mode === 'dlr' ? 'info' : 'warning'}>{client.billing_mode}</Badge></div>
               <div><p className="text-gray-500">API Enabled</p><Badge variant={client.api_enabled ? 'success' : 'default'}>{client.api_enabled ? 'Yes' : 'No'}</Badge></div>
               <div><p className="text-gray-500">Force DLR</p><Badge variant={client.force_dlr ? 'success' : 'default'}>{client.force_dlr ? 'Yes' : 'No'}</Badge></div>
+              {client.force_dlr && <div><p className="text-gray-500">DLR Timeout</p><p className="font-mono">{client.force_dlr_timeout_mode === 'fixed' ? `${client.dlr_timeout || 150}s` : client.force_dlr_timeout_mode === 'random_0_5' ? 'Random 0–5s' : 'Random 0–10s'}</p></div>}
               {client.webhook_url && <div className="col-span-2"><p className="text-gray-500">Webhook</p><p className="text-xs font-mono">{client.webhook_url}</p></div>}
             </div>
           </Card>

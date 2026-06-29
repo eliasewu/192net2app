@@ -1,22 +1,26 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, Search, Filter, Download, MoreVertical, Edit, Trash2, Eye, Radio } from 'lucide-react';
+import { Plus, Search, Filter, Download, MoreVertical, Edit, Trash2, Eye, Radio, Phone, Globe, Shield } from 'lucide-react';
+import { exportCSV, exportExcel } from '../../services/exportService';
 import { useData } from '../../store/DataContext';
 import { Card } from '../../components/UI/Card';
 import { Button } from '../../components/UI/Button';
 import { Badge } from '../../components/UI/Badge';
 import { Table, Pagination } from '../../components/UI/Table';
 import { Modal } from '../../components/UI/Modal';
+import { useToast } from '../../components/UI/Toast';
 import { Client } from '../../types';
 
 export const ClientsList: React.FC = () => {
   const navigate = useNavigate();
   const { clients, deleteClient, routePlans } = useData();
+  const { addToast } = useToast();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [deleteModal, setDeleteModal] = useState<Client | null>(null);
   const [actionMenu, setActionMenu] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const itemsPerPage = 10;
 
@@ -24,7 +28,10 @@ export const ClientsList: React.FC = () => {
     const matchesSearch = 
       client.company_name.toLowerCase().includes(search.toLowerCase()) ||
       client.client_code.toLowerCase().includes(search.toLowerCase()) ||
-      client.email.toLowerCase().includes(search.toLowerCase());
+      client.email.toLowerCase().includes(search.toLowerCase()) ||
+      (client.phone || '').toLowerCase().includes(search.toLowerCase()) ||
+      (client.country || '').toLowerCase().includes(search.toLowerCase()) ||
+      (client.smpp_ip || '').toLowerCase().includes(search.toLowerCase());
     const matchesStatus = statusFilter === 'all' || client.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
@@ -35,16 +42,24 @@ export const ClientsList: React.FC = () => {
     currentPage * itemsPerPage
   );
 
-  const getRoutePlanName = (id: string | null) => {
+  const getPlanName = (id: string | null) => {
     if (!id) return 'None';
     const plan = routePlans.find(p => p.id === id);
     return plan?.plan_name || 'Unknown';
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (deleteModal) {
-      deleteClient(deleteModal.id);
-      setDeleteModal(null);
+      setDeleting(true);
+      try {
+        await deleteClient(deleteModal.id);
+        addToast('success', 'Client deleted successfully');
+        setDeleteModal(null);
+      } catch (e: any) {
+        addToast('error', 'Failed to delete client: ' + (e?.message || 'Unknown error'));
+      } finally {
+        setDeleting(false);
+      }
     }
   };
 
@@ -71,6 +86,32 @@ export const ClientsList: React.FC = () => {
         <div>
           <p className="text-sm text-gray-800">{client.contact_person}</p>
           <p className="text-xs text-gray-500">{client.email}</p>
+          <div className="flex items-center gap-1 mt-0.5">
+            <Phone size={10} className="text-gray-400" />
+            <span className="text-xs text-gray-400">{client.phone || '—'}</span>
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: 'location',
+      header: 'Country',
+      render: (client: Client) => (
+        <div className="flex items-center gap-1.5">
+          <Globe size={14} className="text-gray-400 flex-shrink-0" />
+          <span className="text-sm text-gray-700">{client.country || '—'}</span>
+        </div>
+      ),
+    },
+    {
+      key: 'smpp_ip',
+      header: 'Allowed IP',
+      render: (client: Client) => (
+        <div className="flex items-center gap-1.5">
+          <Shield size={14} className={client.smpp_ip && client.smpp_ip !== '0.0.0.0' ? 'text-green-500' : 'text-gray-400'} />
+          <span className={`text-sm font-mono ${client.smpp_ip && client.smpp_ip !== '0.0.0.0' ? 'text-gray-700' : 'text-gray-400'}`}>
+            {client.smpp_ip && client.smpp_ip !== '0.0.0.0' ? client.smpp_ip : 'Any'}
+          </span>
         </div>
       ),
     },
@@ -99,7 +140,7 @@ export const ClientsList: React.FC = () => {
       key: 'routing_plan',
       header: 'Route Plan',
       render: (client: Client) => (
-        <Badge variant="info">{getRoutePlanName(client.routing_plan_id)}</Badge>
+        <Badge variant="info" size="sm">{getPlanName(client.routing_plan_id)}</Badge>
       ),
     },
     {
@@ -227,7 +268,8 @@ export const ClientsList: React.FC = () => {
               <option value="suspended">Suspended</option>
             </select>
             <Button variant="secondary" icon={<Filter size={16} />}>Filters</Button>
-            <Button variant="secondary" icon={<Download size={16} />}>Export</Button>
+            <Button variant="secondary" icon={<Download size={16} />} onClick={() => exportCSV('clients_export.csv', ['Client Code','Company','Contact','Email','Phone','Country','Allowed IP','SMPP Username','Balance','Credit Limit','Status','Route Plan'], filteredClients.map(c => [c.client_code, c.company_name, c.contact_person, c.email, c.phone || '', c.country || '', c.smpp_ip || 'Any', c.smpp_username, String(c.balance), String(c.credit_limit), c.status, getPlanName(c.routing_plan_id)]))}>Export CSV</Button>
+            <Button variant="secondary" icon={<Download size={16} />} onClick={() => exportExcel('clients_export.xlsx', 'Clients', ['Client Code','Company','Contact','Email','Phone','Country','Allowed IP','SMPP Username','Balance','Credit Limit','Status','Route Plan'], filteredClients.map(c => [c.client_code, c.company_name, c.contact_person, c.email, c.phone || '', c.country || '', c.smpp_ip || 'Any', c.smpp_username, String(c.balance), String(c.credit_limit), c.status, getPlanName(c.routing_plan_id)]))}>Export Excel</Button>
           </div>
         </div>
       </Card>
@@ -257,7 +299,7 @@ export const ClientsList: React.FC = () => {
         footer={
           <div className="flex justify-end gap-3">
             <Button variant="secondary" onClick={() => setDeleteModal(null)}>Cancel</Button>
-            <Button variant="danger" onClick={handleDelete}>Delete Client</Button>
+            <Button variant="danger" onClick={handleDelete} disabled={deleting} loading={deleting}>Delete Client</Button>
           </div>
         }
       >

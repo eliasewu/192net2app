@@ -84,6 +84,7 @@ CREATE TABLE clients (
     webhook_url TEXT,
     force_dlr BOOLEAN DEFAULT false,
     dlr_timeout INTEGER DEFAULT 150,
+    force_dlr_timeout_mode VARCHAR(20) DEFAULT 'fixed' CHECK (force_dlr_timeout_mode IN ('fixed','random_0_5','random_0_10')),
     routing_plan_id INTEGER,
     rate_plan_id INTEGER,
     status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active','inactive','suspended')),
@@ -106,12 +107,26 @@ CREATE TABLE suppliers (
     contact_person VARCHAR(255),
     email VARCHAR(255),
     phone VARCHAR(50),
-    connection_type VARCHAR(50) NOT NULL CHECK (connection_type IN ('smpp','http','ott_whatsapp','ott_telegram','voice_otp','local_bypass','rcs','flash_sms')),
+    connection_type VARCHAR(50) NOT NULL CHECK (connection_type IN ('smpp','http','ott_whatsapp','ott_telegram','voice_otp','local_bypass','rcs','flash_sms','email')),
     smpp_host VARCHAR(255),
     smpp_port INTEGER DEFAULT 2775,
     smpp_username VARCHAR(100),
     smpp_password VARCHAR(255),
     system_id VARCHAR(100),
+    -- SMPP protocol-version preference for the bind_transceiver PDU's
+    -- `interface_version` byte. `auto` lets the Java 21 SMPP gateway pick
+    -- (typically the highest supported). The negotiated version returned by
+    -- the SMSC is recorded in smpp_sessions.negotiated_version.
+    smpp_version VARCHAR(10) DEFAULT 'auto' CHECK (smpp_version IN ('auto','3.3','3.4','5.0')),
+    -- SMPP system_type sent in the bind PDU. Per-SMSC configurable:
+    -- "" (empty) for EIMS/modern SMSCs, "CMT" for legacy, "SMPP"/"VMA" for others.
+    smpp_system_type VARCHAR(50) DEFAULT '',
+    -- Universal SMSC connectivity: per-supplier bind parameters for maximum compatibility
+    -- with Java, Kannel, Node, Python, Jasmin, CloudHopper, 5GVision, and other SMSCs.
+    smpp_bind_type VARCHAR(20) DEFAULT 'trx' CHECK (smpp_bind_type IN ('trx','tx','rx')),
+    smpp_addr_ton INTEGER DEFAULT 0,
+    smpp_addr_npi INTEGER DEFAULT 0,
+    smpp_addr_range VARCHAR(255) DEFAULT 'system_id',
     api_url TEXT,
     api_key TEXT,
     api_secret TEXT,
@@ -122,6 +137,9 @@ CREATE TABLE suppliers (
     bind_status VARCHAR(20) DEFAULT 'unbound' CHECK (bind_status IN ('bound','unbound','binding','error')),
     consecutive_failures INTEGER DEFAULT 0,
     max_failures INTEGER DEFAULT 20,
+    force_dlr BOOLEAN DEFAULT false,
+    dlr_timeout INTEGER DEFAULT 150,
+    force_dlr_timeout_mode VARCHAR(20) DEFAULT 'fixed' CHECK (force_dlr_timeout_mode IN ('fixed','random_0_5','random_0_10')),
     status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active','inactive','suspended')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -303,6 +321,17 @@ CREATE TABLE sms_logs (
     esm_class INTEGER DEFAULT 0,
     submit_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     delivery_time TIMESTAMP,
+    -- 'source' lets producers tag who wrote the row so a recursive
+    -- DLR pipeline (server.cjs poller → Java DlrRouter → sms_logs INSERT
+    -- → server.cjs poller sees the same row again) can be filtered.
+    -- Convention:
+    --   'external_api'    — /api/sms/send and HTTP connector INSERTs
+    --   'node_voice_dlr'  — pushSyntheticVoiceDlr (this Node process)
+    --   'gateway_pushed'  — Java DlrRouter after routing to ESME / webhook
+    -- Recursion defense: any consumer scanning sms_logs for undelivered
+    -- rows MUST add  WHERE (source IS DISTINCT FROM 'gateway_pushed')
+    -- so Java's own bookkeeping rows aren't re-fired.
+    source VARCHAR(50) DEFAULT 'external_api',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -397,12 +426,55 @@ CREATE TABLE ott_devices (
 );
 
 -- ============================================================
+-- 14b. SMPP SESSIONS TABLE (Bridge SMPP connections to DB)
+-- ============================================================
+CREATE TABLE smpp_sessions (
+    id SERIAL PRIMARY KEY,
+    entity_type VARCHAR(20) NOT NULL CHECK (entity_type IN ('client','supplier')),
+    entity_id INTEGER NOT NULL,
+    system_id VARCHAR(100) NOT NULL,
+    ip_address VARCHAR(50),
+    port INTEGER DEFAULT 2775,
+    bind_mode VARCHAR(20) DEFAULT 'transceiver' CHECK (bind_mode IN ('transceiver','transmitter','receiver')),
+    status VARCHAR(20) DEFAULT 'unbound' CHECK (status IN ('bound','unbound','binding','error')),
+    -- The SMPP version the SMSC agreed to in its bind_resp PDU.
+    -- Populated when Java calls /internal/esme_bind_event with an
+    -- `interface_version` field; NULL means Java didn't relay the
+    -- value (older gateway builds) or the bind never completed.
+    negotiated_version VARCHAR(10),
+    connected_at TIMESTAMP,
+    disconnected_at TIMESTAMP,
+    last_activity TIMESTAMP,
+    bound_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(entity_type, entity_id)
+);
+
+-- ============================================================
+-- 14c. API KEYS TABLE (External API client management)
+-- ============================================================
+CREATE TABLE api_keys (
+    id SERIAL PRIMARY KEY,
+    client_id INTEGER REFERENCES clients(id) NOT NULL,
+    api_key_hash VARCHAR(255) UNIQUE NOT NULL,
+    api_key_prefix VARCHAR(10) NOT NULL,
+    rate_limit_tps INTEGER DEFAULT 10,
+    daily_quota INTEGER DEFAULT 5000,
+    usage_count INTEGER DEFAULT 0,
+    usage_reset_at DATE DEFAULT CURRENT_DATE,
+    last_used_at TIMESTAMP,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================
 -- 15. API CONNECTORS TABLE
 -- ============================================================
 CREATE TABLE api_connectors (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     provider VARCHAR(100) NOT NULL,
+    connector_type VARCHAR(50) DEFAULT 'http' CHECK (connector_type IN ('http','rcs','flash_sms')),
     region VARCHAR(100),
     auth_type VARCHAR(50) DEFAULT 'API_KEY' CHECK (auth_type IN ('API_KEY','BASIC','BEARER','OAUTH2')),
     http_method VARCHAR(10) DEFAULT 'POST' CHECK (http_method IN ('POST','GET','PUT')),
@@ -410,12 +482,16 @@ CREATE TABLE api_connectors (
     api_secret TEXT,
     send_url TEXT NOT NULL,
     dlr_url TEXT,
+    dlr_webhook_secret TEXT,
+    dlr_status_mapping JSONB DEFAULT '{"delivered":"DELIVRD","failed":"UNDELIV"}',
     submit_pattern VARCHAR(255),
     dlr_pattern VARCHAR(255),
     dlr_value VARCHAR(100),
+    test_payload JSONB,
     params TEXT,
     is_active BOOLEAN DEFAULT true,
     connection_status VARCHAR(20) DEFAULT 'untested' CHECK (connection_status IN ('untested','connected','failed','testing')),
+    last_tested_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -816,3 +892,47 @@ COMMENT ON TABLE tenants IS 'Tenant management with feature limits';
 COMMENT ON TABLE platform_settings IS 'Global platform configuration';
 COMMENT ON TABLE smtp_config IS 'SMTP email configuration';
 COMMENT ON TABLE audit_logs IS 'User activity audit trail';
+
+-- ============================================================
+-- IDEMPOTENT MIGRATIONS (safe to re-run on live databases)
+-- ============================================================
+-- Each ALTER TABLE...ADD COLUMN IF NOT EXISTS is non-destructive and
+-- skips gracefully if the column already exists. Run after the schema
+-- has already been loaded to add new columns to a live database.
+-- ============================================================
+
+-- 1. Per-supplier preferred SMPP protocol version (default 'auto' lets
+--    the Java 21 SMPP gateway pick the highest version the SMSC accepts).
+ALTER TABLE suppliers
+  ADD COLUMN IF NOT EXISTS smpp_version VARCHAR(10)
+  DEFAULT 'auto'
+  CHECK (smpp_version IN ('auto','3.3','3.4','5.0'));
+
+-- 2. Negotiated version (filled in by /internal/esme_bind_event when Java
+--    relays the bind_resp.negotiated_interface_version back to Node).
+ALTER TABLE smpp_sessions
+  ADD COLUMN IF NOT EXISTS negotiated_version VARCHAR(10);
+
+-- 3. Inbound-supplier mode: when true the platform waits for the supplier
+--    to connect TO us (client role) instead of dialling out to them.
+--    Useful for GSM gateways (eJoin, Skyline) behind NAT without a
+--    public IP. The supplier authenticates via its smpp_username /
+--    smpp_password on the ESME port.
+ALTER TABLE suppliers
+  ADD COLUMN IF NOT EXISTS is_inbound BOOLEAN DEFAULT false;
+
+-- 4. force_dlr_timeout_mode for clients (fixed | random_0_5 | random_0_10)
+ALTER TABLE clients
+  ADD COLUMN IF NOT EXISTS force_dlr_timeout_mode VARCHAR(20)
+  DEFAULT 'fixed'
+  CHECK (force_dlr_timeout_mode IN ('fixed','random_0_5','random_0_10'));
+
+-- 5. force_dlr + dlr_timeout + force_dlr_timeout_mode for suppliers
+ALTER TABLE suppliers
+  ADD COLUMN IF NOT EXISTS force_dlr BOOLEAN DEFAULT false;
+ALTER TABLE suppliers
+  ADD COLUMN IF NOT EXISTS dlr_timeout INTEGER DEFAULT 150;
+ALTER TABLE suppliers
+  ADD COLUMN IF NOT EXISTS force_dlr_timeout_mode VARCHAR(20)
+  DEFAULT 'fixed'
+  CHECK (force_dlr_timeout_mode IN ('fixed','random_0_5','random_0_10'));

@@ -36,7 +36,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleSidebar, isSidebarCollap
   const totalSupplierCount = suppliers.filter(s => s.status === 'active').length;
 
   return (
-    <header className={`fixed top-0 right-0 h-16 bg-white border-b border-gray-200 z-30 transition-all duration-300
+    <header className={`fixed top-0 right-0 h-16 bg-white border-b-2 border-blue-500 z-30 transition-all duration-300
       ${isSidebarCollapsed ? 'left-16' : 'left-64'}`}>
       <div className="h-full px-4 flex items-center justify-between">
         {/* Left side */}

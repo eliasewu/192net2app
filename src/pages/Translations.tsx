@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Plus, Search, Edit, Trash2, Play, Regex, Phone, Hash, Type, Code2, Shield, Globe, ArrowRight, RefreshCw } from 'lucide-react';
+import { Plus, Search, Edit, Trash2, Play, Regex, Phone, Hash, Type, Code2, Shield, Globe, ArrowRight, RefreshCw, Download } from 'lucide-react';
 import { Card } from '../components/UI/Card';
 import { Button } from '../components/UI/Button';
 import { Badge } from '../components/UI/Badge';
+import { exportCSV, exportExcel } from '../services/exportService';
 import { Table, Pagination } from '../components/UI/Table';
 import { Modal } from '../components/UI/Modal';
 import { Input, Select, Textarea } from '../components/UI/Input';
@@ -320,7 +321,11 @@ export const TranslationsPage: React.FC = () => {
           <h1 className="text-2xl font-bold text-gray-800">Translations</h1>
           <p className="text-gray-500 mt-1">Number formatting, SID masking, content translation, OTP extraction, regex replacement</p>
         </div>
+        <div className="flex gap-2">
+          <Button variant="secondary" icon={<Download size={16}/>} onClick={()=>exportCSV('translations_export.csv',['Name','Type','Priority','Apply To','Entity','Pattern','Replace','Description','Active'],filtered.map(t=>[t.name,typeLabels[t.type]?.label||t.type,String(t.priority),t.apply_to,t.apply_entity_id,t.match_pattern,t.replace_pattern,t.description,t.is_active?'Yes':'No']))}>Export CSV</Button>
+          <Button variant="secondary" icon={<Download size={16}/>} onClick={()=>exportExcel('translations_export.xlsx','Translations',['Name','Type','Priority','Apply To','Entity','Pattern','Replace','Description','Active'],filtered.map(t=>[t.name,typeLabels[t.type]?.label||t.type,String(t.priority),t.apply_to,t.apply_entity_id,t.match_pattern,t.replace_pattern,t.description,t.is_active?'Yes':'No']))}>Export Excel</Button>
         <Button icon={<Plus size={18} />} onClick={() => openModal()}>Add Translation</Button>
+        </div>
       </div>
 
       {/* Quick Info Cards */}
@@ -355,7 +360,7 @@ export const TranslationsPage: React.FC = () => {
 
       {/* Table */}
       <Card noPadding>
-        <Table columns={columns} data={paginated} keyExtractor={t => t.id} />
+        <Table columns={columns} data={paginated} keyExtractor={t => t.id}/>
         <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} totalItems={filtered.length} itemsPerPage={itemsPerPage} />
       </Card>
 

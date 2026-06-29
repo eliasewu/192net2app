@@ -1,7 +1,10 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { DataProvider } from './store/DataContext';
+import { ToastProvider } from './components/UI/Toast';
 import { AuthProvider, useAuth } from './store/AuthContext';
 import { MainLayout } from './components/Layout/MainLayout';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import BackendStatusBanner from './components/UI/BackendStatusBanner';
 import { LandingPage } from './pages/Landing/LandingPage';
 import { Login } from './pages/Auth/Login';
 import { Dashboard } from './pages/Dashboard';
@@ -16,6 +19,10 @@ import { SupplierRates } from './pages/Suppliers/SupplierRates';
 import { OTTDevices } from './pages/Suppliers/OTTDevices';
 import { APIConnectors } from './pages/Suppliers/APIConnectors';
 import { VoiceOTP } from './pages/Suppliers/VoiceOTP';
+import { SocialAPISuppliers } from './pages/Suppliers/SocialAPISuppliers';
+import { EmailSuppliers } from './pages/Suppliers/EmailSuppliers';
+import { SmtpConfig } from './pages/Suppliers/SmtpConfig';
+import { BusinessAPIConnect } from './pages/BusinessAPIConnect';
 import { TrunksList } from './pages/Routing/TrunksList';
 import { RoutesList } from './pages/Routing/RoutesList';
 import { RouteMaps } from './pages/Routing/RouteMaps';
@@ -23,6 +30,8 @@ import { MCCMNCDatabase } from './pages/Rates/MCCMNCDatabase';
 import { SMSLogs } from './pages/SMSLogs';
 import { InvoicesList } from './pages/Billing/InvoicesList';
 import { EmailTemplates } from './pages/Notifications/EmailTemplates';
+import { TeamsConfig } from './pages/Notifications/TeamsConfig';
+import { SlackConfig } from './pages/Notifications/SlackConfig';
 import { BindStatus } from './pages/BindStatus';
 import { TestSMS } from './pages/Testing/TestSMS';
 import { License } from './pages/System/License';
@@ -30,6 +39,10 @@ import { TranslationsPage } from './pages/Translations';
 import { CampaignsPage } from './pages/Campaigns';
 import { SMSInbox } from './pages/SMSInbox';
 import { UserManagement } from './pages/Users/UserManagement';
+import { NumberValidation } from './pages/NumberValidation';
+import { AsteriskConfig } from './pages/AsteriskConfig';
+import { SipDestinations } from './pages/SipDestinations';
+import { IPList } from './pages/IPList';
 import {
   RoutePlans, RateManagement, BulkUpload, BillingOverview, PaymentsPage,
   RealtimeReport, HourlyReport, DailyReport, MonthlyReport,
@@ -55,8 +68,12 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
 function AppRoutes() {
   return (
     <Routes>
-      {/* Public routes - redirect to dashboard if already logged in */}
-      <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
+      {/* Public routes - redirect to dashboard if already logged in.
+          Login is wrapped in an ErrorBoundary so any future unhandled
+          render-phase exception (network glitch, bad token shape, etc.)
+          surfaces a clean fallback UI instead of crashing the route or
+          leaking a cryptic message. */}
+      <Route path="/login" element={<PublicRoute><ErrorBoundary title="Login couldn't load"><Login /></ErrorBoundary></PublicRoute>} />
       <Route path="/landing" element={<PublicRoute><LandingPage /></PublicRoute>} />
 
       {/* Protected routes - redirect to login if not authenticated */}
@@ -75,6 +92,10 @@ function AppRoutes() {
         <Route path="suppliers/api-connectors" element={<APIConnectors />} />
         <Route path="suppliers/ott-devices" element={<OTTDevices />} />
         <Route path="suppliers/voice-otp" element={<VoiceOTP />} />
+        <Route path="suppliers/social-api" element={<SocialAPISuppliers />} />
+        <Route path="suppliers/email" element={<EmailSuppliers />} />
+        <Route path="suppliers/email/smtp" element={<SmtpConfig />} />
+        <Route path="business-api-connect" element={<BusinessAPIConnect />} />
         <Route path="routing/trunks" element={<TrunksList />} />
         <Route path="routing/routes" element={<RoutesList />} />
         <Route path="routing/plans" element={<RoutePlans />} />
@@ -99,12 +120,18 @@ function AppRoutes() {
         <Route path="translations" element={<TranslationsPage />} />
         <Route path="notifications/alerts" element={<AlertsPage />} />
         <Route path="notifications/templates" element={<EmailTemplates />} />
+        <Route path="notifications/teams" element={<TeamsConfig />} />
+        <Route path="notifications/slack" element={<SlackConfig />} />
         <Route path="users" element={<UserManagement />} />
         <Route path="users/roles" element={<RolesPage />} />
         <Route path="system/settings" element={<PlatformSettings />} />
         <Route path="system/license" element={<License />} />
         <Route path="system/database" element={<DatabasePage />} />
         <Route path="system/backup" element={<BackupPage />} />
+        <Route path="number-validation" element={<NumberValidation />} />
+        <Route path="system/asterisk" element={<AsteriskConfig />} />
+        <Route path="system/asterisk-destinations" element={<SipDestinations />} />
+        <Route path="ip-list" element={<IPList />} />
       </Route>
 
       {/* Catch all */}
@@ -118,7 +145,17 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <DataProvider>
+          {/* Mounted globally so it shows on /login (where the
+              upstream-down 502 storm originates) AND inside MainLayout
+              on every protected route. Returns null when the backend
+              is reachable; renders a sticky red banner otherwise.
+              Lives inside <BrowserRouter> by convention so a future
+              contributor can add router hooks (useLocation, Link)
+              without a "must be inside <Router>" lint trip. */}
+          <ToastProvider>
+          <BackendStatusBanner />
           <AppRoutes />
+          </ToastProvider>
         </DataProvider>
       </AuthProvider>
     </BrowserRouter>

@@ -583,6 +583,49 @@ systemctl daemon-reload
 systemctl enable net2app-hub
 
 # ============================================================
+# 6.5. SELF-HEALING HEALTHCHECK (runs every 1 min)
+# ============================================================
+# Once per minute the net2app-hub-healthcheck.timer invokes
+# healthcheck.sh, which POSTs an unauthenticated probe to the
+# upstream at 127.0.0.1:3001. If the probe fails (curl returns
+# 000 — connection refused / timeout), the script restarts the
+# net2app-hub service so nginx stops returning 502 to the SPA.
+# State file at /var/lib/net2app-hub/healthcheck.state enforces
+# a 120s cooldown to prevent restart storms while systemd's own
+# Restart=always is mid-recovery.
+log "Step 6.5/10: Installing self-healing healthcheck + timer..."
+
+mkdir -p /opt/net2app-hub/scripts /var/lib/net2app-hub
+
+install -m 0750 scripts/healthcheck.sh /opt/net2app-hub/scripts/healthcheck.sh
+install -m 0644 scripts/systemd/net2app-hub-healthcheck.service /etc/systemd/system/net2app-hub-healthcheck.service
+install -m 0644 scripts/systemd/net2app-hub-healthcheck.timer    /etc/systemd/system/net2app-hub-healthcheck.timer
+
+if [ -d /etc/logrotate.d ]; then
+  install -m 0644 scripts/logrotate/net2app-hub-healthcheck /etc/logrotate.d/net2app-hub-healthcheck
+fi
+
+systemctl daemon-reload
+systemctl enable --now net2app-hub-healthcheck.timer
+
+# Confirm the timer actually armed — silent success on a 502
+# recovery script masks typos in the .service/.timer filenames
+# or daemon-reload-by-os hurdles. Show what the operator will
+# actually see ~60s after this install completes.
+#
+# Wrapped in a subshell + `|| true` so this verify step can NEVER
+# abort the install under `set -e`: the timer legitimately won't
+# appear in `list-timers` for ~60s after enable --now (OnBootSec),
+# and we still want nginx + SSL + firewall to install after this.
+if command -v systemctl >/dev/null; then
+  log "Step 6.5 verify:"
+  (
+    systemctl list-timers --no-pager net2app-hub-healthcheck.timer \
+      || log "WARN: net2app-hub-healthcheck.timer not yet listed (will appear after first activation)"
+  ) 2>&1 || true
+fi
+
+# ============================================================
 # 7. NGINX CONFIGURATION
 # ============================================================
 log "Step 7/10: Configuring Nginx..."
@@ -684,7 +727,12 @@ echo ""
 echo -e "  ${GREEN}Login:${NC} admin / admin123"
 echo ""
 echo -e "  Commands:"
-echo -e "    systemctl status net2app-hub   # Check app status"
-echo -e "    journalctl -u net2app-hub -f  # View logs"
-echo -e "    systemctl restart net2app-hub # Restart app"
+echo -e "    systemctl status net2app-hub                        # App status"
+echo -e "    journalctl -u net2app-hub -f                        # App logs"
+echo -e "    systemctl restart net2app-hub                      # Restart app"
+echo -e "    systemctl list-timers net2app-hub-healthcheck.timer # Self-heal timer"
+echo -e "    systemctl status net2app-hub-healthcheck.timer      # Is the timer active?"
+echo -e "    journalctl -u net2app-hub-healthcheck              # Probe + restart log"
+echo -e "    tail -f /var/log/net2app-hub-healthcheck.log        # Persistent probe log"
+echo -e "    bash /opt/net2app-hub/scripts/restart-smoke.sh      # Restart + end-to-end smoke"
 echo ""

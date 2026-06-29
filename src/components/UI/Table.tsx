@@ -13,6 +13,7 @@ interface TableProps<T> {
   data: T[];
   keyExtractor: (item: T) => string;
   onRowClick?: (item: T) => void;
+  getRowStyle?: (item: T, index: number) => string;
   loading?: boolean;
   emptyMessage?: string;
 }
@@ -22,6 +23,7 @@ export function Table<T>({
   data,
   keyExtractor,
   onRowClick,
+  getRowStyle,
   loading,
   emptyMessage = 'No data available',
 }: TableProps<T>) {
@@ -37,11 +39,11 @@ export function Table<T>({
     <div className="overflow-x-auto">
       <table className="w-full">
         <thead>
-          <tr className="border-b border-gray-200">
+          <tr className="bg-blue-600 border-b-2 border-blue-700">
             {columns.map(col => (
               <th
                 key={col.key}
-                className={`px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider
+                className={`px-4 py-3 text-xs font-semibold text-white uppercase tracking-wider
                   ${col.align === 'center' ? 'text-center' : col.align === 'right' ? 'text-right' : 'text-left'}`}
                 style={{ width: col.width }}
               >
@@ -58,11 +60,11 @@ export function Table<T>({
               </td>
             </tr>
           ) : (
-            data.map(item => (
+            data.map((item, idx) => (
               <tr
                 key={keyExtractor(item)}
                 onClick={() => onRowClick?.(item)}
-                className={`hover:bg-gray-50 transition-colors ${onRowClick ? 'cursor-pointer' : ''}`}
+                className={`hover:bg-gray-50 transition-colors ${onRowClick ? 'cursor-pointer' : ''} ${getRowStyle ? getRowStyle(item, idx) : 'bg-white'}`}
               >
                 {columns.map(col => (
                   <td

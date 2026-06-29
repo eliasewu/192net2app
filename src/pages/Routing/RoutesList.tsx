@@ -1,22 +1,26 @@
 import React, { useState } from 'react';
-import { Plus, Search, Edit, Trash2, MoreVertical, Power, GitBranch } from 'lucide-react';
+import { Plus, Search, Edit, Trash2, MoreVertical, Power, GitBranch, Download } from 'lucide-react';
 import { useData } from '../../store/DataContext';
 import { Card } from '../../components/UI/Card';
 import { Button } from '../../components/UI/Button';
 import { Badge } from '../../components/UI/Badge';
+import { exportCSV, exportExcel } from '../../services/exportService';
 import { Table } from '../../components/UI/Table';
 import { Modal } from '../../components/UI/Modal';
 import { Input, Select } from '../../components/UI/Input';
+import { useToast } from '../../components/UI/Toast';
 import { Route, RouteMethod } from '../../types';
 
 export const RoutesList: React.FC = () => {
   const { routes, trunks, addRoute, updateRoute, deleteRoute } = useData();
+  const { addToast } = useToast();
   const getTrunkById = (id: string) => trunks.find(t => t.id === id);
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingRoute, setEditingRoute] = useState<Route | null>(null);
   const [deleteModal, setDeleteModal] = useState<Route | null>(null);
   const [actionMenu, setActionMenu] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const [formData, setFormData] = useState({
     route_name: '',
@@ -68,10 +72,18 @@ export const RoutesList: React.FC = () => {
     setShowModal(false);
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (deleteModal) {
-      deleteRoute(deleteModal.id);
-      setDeleteModal(null);
+      setDeleting(true);
+      try {
+        await deleteRoute(deleteModal.id);
+        addToast('success', 'Route deleted successfully');
+        setDeleteModal(null);
+      } catch (e: any) {
+        addToast('error', 'Failed to delete route: ' + (e?.message || 'Unknown error'));
+      } finally {
+        setDeleting(false);
+      }
     }
   };
 
@@ -203,7 +215,11 @@ export const RoutesList: React.FC = () => {
           <h1 className="text-2xl font-bold text-gray-800">Routes</h1>
           <p className="text-gray-500 mt-1">Configure routing rules and trunk assignments</p>
         </div>
+        <div className="flex gap-2">
+          <Button variant="secondary" icon={<Download size={16}/>} onClick={()=>exportCSV('routes_export.csv',['Route Name','ID','Trunks','Method','Status','Created'],filteredRoutes.map(r=>[r.route_name,r.id,r.trunk_ids.map(tid=>{const t=getTrunkById(tid);return t?t.trunk_name:tid;}).join(', '),r.route_method,r.is_active?'Active':'Inactive',r.created_at?new Date(r.created_at).toLocaleDateString():'']))}>Export CSV</Button>
+          <Button variant="secondary" icon={<Download size={16}/>} onClick={()=>exportExcel('routes_export.xlsx','Routes',['Route Name','ID','Trunks','Method','Status','Created'],filteredRoutes.map(r=>[r.route_name,r.id,r.trunk_ids.map(tid=>{const t=getTrunkById(tid);return t?t.trunk_name:tid;}).join(', '),r.route_method,r.is_active?'Active':'Inactive',r.created_at?new Date(r.created_at).toLocaleDateString():'']))}>Export Excel</Button>
         <Button icon={<Plus size={18} />} onClick={() => openModal()}>Add Route</Button>
+        </div>
       </div>
 
       {/* Stats */}
@@ -252,6 +268,7 @@ export const RoutesList: React.FC = () => {
           columns={columns}
           data={filteredRoutes}
           keyExtractor={(route) => route.id}
+          
         />
       </Card>
 
@@ -334,7 +351,7 @@ export const RoutesList: React.FC = () => {
         footer={
           <div className="flex justify-end gap-3">
             <Button variant="secondary" onClick={() => setDeleteModal(null)}>Cancel</Button>
-            <Button variant="danger" onClick={handleDelete}>Delete Route</Button>
+            <Button variant="danger" onClick={handleDelete} disabled={deleting} loading={deleting}>Delete Route</Button>
           </div>
         }
       >

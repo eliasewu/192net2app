@@ -1,0 +1,175 @@
+# ============================================================
+# .github/workflows/ci.yml — NET2APP Hub CI
+# ============================================================
+# Runs the same three phases as the local pre-commit hook
+# (scripts/pre-commit) — vitest, tsc --noEmit, scripts/smoke.sh —
+# but against a clean ubuntu runner with PostgreSQL bootstrapped
+# from src/database/schema.sql.
+#
+# Triggered on:
+#   - every pull_request (e.g. feature branches, fork PRs)
+#   - every push to main (catches regressions landing in trunk)
+#   - manual workflow_dispatch (kicks the same pipeline ad-hoc)
+#
+# Single job, fail-fast: matches local hook semantics. If vitest
+# fails, tsc + smoke are skipped; if tsc fails, smoke is skipped.
+# To run all three even on partial failure, drop the `if:` gates
+# or split into parallel jobs (see TODO below).
+# ============================================================
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel in-progress duplicates when the same PR is pushed again
+# or `main` receives a rapid sequence of commits. Saves CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Read-only is enough for a build job — drop write tokens by default.
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: vitest + tsc + smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: sms_user
+          POSTGRES_PASSWORD: SmsPlatform2024Secure
+          POSTGRES_DB: sms_platform
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h localhost -U sms_user -d sms_platform"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    # Env exposed to every step. PGPASSWORD lets subsequent psql
+    # commands auth without a password prompt; JWT_SECRET pins a
+    # deterministic secret so token signatures are stable across
+    # runs (server.cjs falls back to 'net2app-hub-<Date.now()>'
+    # if JWT_SECRET is unset, which makes log comparison noisy).
+    env:
+      PGPASSWORD: SmsPlatform2024Secure
+      JWT_SECRET: ci-test-jwt-secret-not-for-production
+      NODE_ENV: test
+      DB_HOST: localhost
+      DB_PORT: '5432'
+      DB_USER: sms_user
+      DB_NAME: sms_platform
+      DB_PASSWORD: SmsPlatform2024Secure
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          # Pin to Node 22 — matches the Vite 8 engine range
+          # (^20.19 || ^22.12) so peer-dep resolution is consistent
+          # with local development.
+          node-version: '22'
+          # Caches ~/.npm against package-lock.json for speed.
+          cache: 'npm'
+
+      - name: Install dependencies (npm ci with legacy-peer-deps)
+        run: npm ci --legacy-peer-deps
+        # --legacy-peer-deps: keeps npm's legacy resolver active so
+        # Vite 8 + Vitest 4 + Tailwind 4 + vite-plugin-singlefile
+        # install — see CONTRIBUTING.md §"Vite plugin peer-deps".
+
+      - name: Vitest unit tests (npm test)
+        run: npm test
+
+      - name: TypeScript type-check (npx tsc --noEmit)
+        run: npx tsc --noEmit
+
+      # psql install + schema load come AFTER vitest/tsc on purpose —
+      # those two phases don't need a DB, so we save ~5s on greenfield
+      # builds by deferring DB setup until it's actually required by
+      # the smoke phase. The local pre-commit hook has the same
+      # vitest → tsc → smoke ordering.
+      - name: Install postgresql-client (used by schema load + smoke.sh)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Load schema.sql into the CI database
+        run: |
+          # `-v ON_ERROR_STOP=1` makes psql exit non-zero on the first
+          # error, so a partial schema load doesn't mask itself behind
+          # a misleading exit-0.
+          psql -h localhost -U sms_user -d sms_platform \
+            -v ON_ERROR_STOP=1 \
+            -f src/database/schema.sql
+
+      - name: Backend smoke test (boots node server.cjs + runs scripts/smoke.sh)
+        run: bash scripts/smoke.sh
+
+      - name: Upload server smoke log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          # The smoke script writes /tmp/srv_smoke.log when server.cjs
+          # fails to come up. Uploading it on failure gives us enough
+          # context in the GH Actions UI to triage without re-running
+          # the job locally.
+          name: srv-smoke-log
+          path: /tmp/srv_smoke.log
+          if-no-files-found: ignore
+
+  # =========================================================
+  # Build the Java 21 SMPP gateway jar via Maven.
+  # Runs in parallel with the verify job — no dependency on
+  # Node/Postgres. The shaded fat jar is uploaded as a CI
+  # artifact so every push to main and every PR produces a
+  # deployable binary without a local Maven install.
+  # =========================================================
+  build-gateway:
+    name: Build Java SMPP Gateway (mvn package)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build with Maven (mvn package)
+        run: mvn package --batch-mode
+        working-directory: smpp-gateway
+
+      - name: Upload SMPP gateway jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: smpp-gateway-jar
+          path: smpp-gateway/target/smpp-gateway.jar
+          if-no-files-found: error
+
+# ============================================================
+# TODO (future polish, NOT shipped in v1):
+# - Split into parallel jobs (vitest, tsc, smoke) for ~30% speedup.
+# - Add `actions/cache@v4` for the build output once we have a
+#   `vite build` smoke phase.
+# - Add a badge to README.md (shields.io + workflow status).
+# - Add CODEOWNERS so review auto-assignment kicks in on /src
+#   vs /server.cjs changes.
+# ============================================================

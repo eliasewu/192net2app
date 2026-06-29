@@ -1,0 +1,31 @@
+[Unit]
+Description=NET2APP Hub - Node.js SMS Platform Server
+Documentation=https://net2app.com/docs
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/net2app-v3
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=DB_HOST=localhost
+Environment=DB_PORT=5432
+Environment=DB_NAME=sms_platform
+Environment=DB_USER=sms_user
+Environment=DB_PASSWORD=SmsPlatform2024Secure
+Environment=JAVA_GATEWAY_URL=http://localhost:8081
+ExecStart=/usr/bin/node server.cjs
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=net2app-hub
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

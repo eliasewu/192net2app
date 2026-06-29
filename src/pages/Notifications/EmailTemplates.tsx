@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Search, Edit, Eye, Power } from 'lucide-react';
+import { Search, Edit, Eye } from 'lucide-react';
 import { useData } from '../../store/DataContext';
 import { Card } from '../../components/UI/Card';
 import { Button } from '../../components/UI/Button';
@@ -9,10 +9,9 @@ import { Input, Textarea } from '../../components/UI/Input';
 import { EmailTemplate } from '../../types';
 
 export const EmailTemplates: React.FC = () => {
-  const { emailTemplates } = useData();
-  const [localTemplates, setLocalTemplates] = useState(emailTemplates);
-  const updateEmailTemplate = (id: string, data: any) => { setLocalTemplates(prev => { return prev.map(t => t.id === id ? { ...t, ...data } : t); }); };
-  const allTemplates = localTemplates;
+  const { emailTemplates, updateEmailTemplate } = useData();
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const [search, setSearch] = useState('');
   const [editModal, setEditModal] = useState<EmailTemplate | null>(null);
   const [previewModal, setPreviewModal] = useState<EmailTemplate | null>(null);
@@ -37,10 +36,21 @@ export const EmailTemplates: React.FC = () => {
     });
   };
 
-  const handleSave = () => {
-    if (editModal) {
-      updateEmailTemplate(editModal.id, formData);
+  const handleSave = async () => {
+    if (!editModal) return;
+    setSaving(true);
+    setSaveError('');
+    try {
+      await updateEmailTemplate(editModal.id, {
+        subject: formData.subject,
+        body: formData.body,
+        is_active: formData.is_active,
+      });
       setEditModal(null);
+    } catch (e: any) {
+      setSaveError(e?.message || 'Failed to save template');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -134,13 +144,6 @@ export const EmailTemplates: React.FC = () => {
                   >
                     <Edit size={16} className="text-gray-500" />
                   </button>
-                  <button
-                    onClick={() => updateEmailTemplate(template.id, { is_active: !template.is_active })}
-                    className="p-1.5 rounded hover:bg-gray-100"
-                    title={template.is_active ? 'Disable' : 'Enable'}
-                  >
-                    <Power size={16} className={template.is_active ? 'text-green-500' : 'text-red-500'} />
-                  </button>
                 </div>
               </div>
 
@@ -176,12 +179,13 @@ export const EmailTemplates: React.FC = () => {
         footer={
           <div className="flex justify-end gap-3">
             <Button variant="secondary" onClick={() => setEditModal(null)}>Cancel</Button>
-            <Button onClick={handleSave}>Save Changes</Button>
+            <Button onClick={handleSave} loading={saving}>Save Changes</Button>
           </div>
         }
       >
         {editModal && (
           <div className="space-y-4">
+            {saveError && <div className="bg-red-50 border border-red-200 text-red-700 text-sm p-2 rounded">{saveError}</div>}
             <Input
               label="Subject"
               value={formData.subject}

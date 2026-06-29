@@ -1,0 +1,31 @@
+[Unit]
+Description=NET2APP SMPP Gateway - Java 21 SMPP (SMSC + ESMC)
+Documentation=https://net2app.com/docs
+After=network.target net2app-hub.service
+Wants=net2app-hub.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/net2app-v3/smpp-gateway
+Environment=ESMC_HOST=0.0.0.0
+Environment=ESMC_PORT=2775
+Environment=CTRL_PORT=8081
+Environment=BACKEND_BASE=http://localhost:3000
+Environment=BACKEND_INTERNAL_TOKEN=
+ExecStart=/usr/bin/java --enable-preview -cp target/smpp-gateway.jar:target/lib/slf4j-simple-1.7.36.jar com.net2app.smppgw.Main
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=net2app-sgw
+
+# Wait a few seconds for the Node backend to be ready before binding
+ExecStartPre=/bin/sleep 3
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

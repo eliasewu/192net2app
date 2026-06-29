@@ -10,7 +10,7 @@ import { Input, Select } from '../../components/UI/Input';
 import { Invoice } from '../../types';
 
 export const InvoicesList: React.FC = () => {
-  const { invoices, clients, suppliers, addInvoice, updateInvoice } = useData();
+  const { invoices, clients, suppliers, smsLogs, addInvoice, updateInvoice, platformSettings } = useData();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
@@ -61,8 +61,27 @@ export const InvoicesList: React.FC = () => {
 
     if (!entity) return;
 
+    // Derive real totals from sms_logs filtered by entity + period.
+    // No more Math.random — billing must reflect actual traffic.
+    const periodLogs = smsLogs.filter(l => {
+      if (formData.entity_type === 'client') {
+        const clientEntity = entity as typeof clients[number];
+        if (String(l.client_id) !== String(clientEntity.id)) return false;
+      } else {
+        const supplierEntity = entity as typeof suppliers[number];
+        if (l.supplier_code !== supplierEntity.supplier_code) return false;
+      }
+      const t = new Date(l.submit_time);
+      return t >= new Date(formData.period_start) && t <= new Date(formData.period_end + 'T23:59:59');
+    });
+    const total_sms = periodLogs.reduce((s, l) => s + (l.message_parts || 1), 0);
+    const total_amount = periodLogs.reduce((s, l) => s + (l.client_rate || 0) * (l.message_parts || 1), 0);
+    const subtotal = formData.entity_type === 'client' ? total_amount : -(periodLogs.reduce((s, l) => s + (l.supplier_rate || 0) * (l.message_parts || 1), 0));
+    const tax_rate = parseFloat((platformSettings as any)?.default_tax_rate || '19') / 100;
+    const tax_amount = +(subtotal * tax_rate).toFixed(2);
+    const grand_total = +(subtotal + tax_amount).toFixed(2);
     const invoiceNumber = `INV-${new Date().getFullYear()}-${String(invoices.length + 1).padStart(3, '0')}`;
-    
+
     addInvoice({
       invoice_number: invoiceNumber,
       entity_type: formData.entity_type,
@@ -70,10 +89,10 @@ export const InvoicesList: React.FC = () => {
       entity_name: entity.company_name,
       period_start: formData.period_start,
       period_end: formData.period_end,
-      total_sms: Math.floor(Math.random() * 100000 + 10000),
-      total_amount: Math.floor(Math.random() * 5000 + 1000),
-      tax_amount: Math.floor(Math.random() * 1000),
-      grand_total: Math.floor(Math.random() * 6000 + 1500),
+      total_sms,
+      total_amount: +subtotal.toFixed(2),
+      tax_amount,
+      grand_total,
       currency: 'EUR',
       status: 'draft',
       due_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
@@ -287,6 +306,7 @@ export const InvoicesList: React.FC = () => {
           data={paginatedInvoices}
           keyExtractor={(invoice) => invoice.id}
           onRowClick={(invoice) => setViewModal(invoice)}
+          
         />
         <Pagination
           currentPage={currentPage}
@@ -420,13 +440,32 @@ export const InvoicesList: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {[
-                    { dest: 'United States', mccmnc: '310*', sms: Math.floor(viewModal.total_sms * 0.35), rate: 0.025, amount: Math.floor(viewModal.total_amount * 0.35) },
-                    { dest: 'United Kingdom', mccmnc: '234*', sms: Math.floor(viewModal.total_sms * 0.25), rate: 0.022, amount: Math.floor(viewModal.total_amount * 0.25) },
-                    { dest: 'Germany', mccmnc: '262*', sms: Math.floor(viewModal.total_sms * 0.15), rate: 0.028, amount: Math.floor(viewModal.total_amount * 0.15) },
-                    { dest: 'France', mccmnc: '208*', sms: Math.floor(viewModal.total_sms * 0.12), rate: 0.026, amount: Math.floor(viewModal.total_amount * 0.12) },
-                    { dest: 'Others', mccmnc: '*', sms: Math.floor(viewModal.total_sms * 0.13), rate: 0.030, amount: Math.floor(viewModal.total_amount * 0.13) },
-                  ].map((d, i) => (
+                  {(() => {
+                    // Derive destination breakdown from REAL sms_logs filtered by entity + period.
+                    const breakdown: { dest: string; mccmnc: string; sms: number; rate: number; amount: number }[] = [];
+                    const matched = smsLogs.filter(l => {
+                      const entityMatch = viewModal.entity_type === 'client'
+                        ? String(l.client_id) === String(viewModal.entity_id)
+                        : l.supplier_code === (suppliers.find(s => String(s.id) === String(viewModal.entity_id))?.supplier_code || '');
+                      const t = new Date(l.submit_time);
+                      return entityMatch && t >= new Date(viewModal.period_start) && t <= new Date(viewModal.period_end + 'T23:59:59');
+                    });
+                    const byCountry = new Map<string, { sms: number; amount: number; rate: number; mccmnc: string }>();
+                    matched.forEach(l => {
+                      const key = l.country || 'Unknown';
+                      const prev = byCountry.get(key) || { sms: 0, amount: 0, rate: l.client_rate || 0.025, mccmnc: `${l.mcc || '***'}${l.mnc || '*'}` };
+                      prev.sms += l.message_parts || 1;
+                      prev.amount += (l.client_rate || 0.025) * (l.message_parts || 1);
+                      byCountry.set(key, prev);
+                    });
+                    Array.from(byCountry.entries()).sort((a,b)=>b[1].sms-a[1].sms).forEach(([dest, v]) => {
+                      breakdown.push({ dest, mccmnc: v.mccmnc, sms: v.sms, rate: v.rate, amount: +v.amount.toFixed(2) });
+                    });
+                    if (breakdown.length === 0) {
+                      breakdown.push({ dest: 'No SMS in period', mccmnc: '—', sms: viewModal.total_sms, rate: 0.025, amount: viewModal.total_amount });
+                    }
+                    return breakdown;
+                  })().map((d, i) => (
                     <tr key={i} className="hover:bg-gray-50">
                       <td className="px-4 py-2">{d.dest}</td>
                       <td className="px-4 py-2"><code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">{d.mccmnc}</code></td>

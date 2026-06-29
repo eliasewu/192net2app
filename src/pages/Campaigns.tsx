@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Plus, Search, Upload, Play, Pause, X, Send, Users, CheckCircle, AlertTriangle } from 'lucide-react';
+import { Plus, Search, Upload, Play, Pause, X, Send, Users, CheckCircle, AlertTriangle, Download } from 'lucide-react';
 import { useData } from '../store/DataContext';
 import { Card } from '../components/UI/Card';
 import { Button } from '../components/UI/Button';
+import { exportCSV, exportExcel } from '../services/exportService';
 import { Badge } from '../components/UI/Badge';
 import { Table, Pagination } from '../components/UI/Table';
 import { Modal } from '../components/UI/Modal';
@@ -131,7 +132,11 @@ export const CampaignsPage: React.FC = () => {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div><h1 className="text-2xl font-bold text-gray-800">Campaigns</h1><p className="text-gray-500 mt-1">Bulk SMS via specific route, upload number lists, schedule or send immediately</p></div>
-        <Button icon={<Plus size={18}/>} onClick={()=>setShowCreate(true)}>Create Campaign</Button>
+        <div className="flex gap-2">
+          <Button variant="secondary" icon={<Download size={16}/>} onClick={()=>exportCSV('campaigns_export.csv',['Campaign Name','Client','Sender ID','Template','Route Plan','Recipients','Sent','Delivered','Failed','Status','Send Type','Scheduled','Started','Completed','Currency','Client Rate','Supplier Rate','Profit/SMS','Created'],filtered.map(c=>[c.campaign_name,clients.find(x=>x.id===c.client_id)?.company_name||'',c.sender_id,c.message_template,routePlans.find(x=>x.id===c.route_plan_id)?.plan_name||'',String(c.recipients_count),String(c.sent_count),String(c.delivered_count),String(c.failed_count),c.status,c.send_type,c.scheduled_at||'',c.started_at||'',c.completed_at||'',c.currency,c.client_rate.toFixed(6),c.supplier_rate.toFixed(6),c.profit.toFixed(4),new Date(c.created_at).toISOString().split('T')[0]]))}>Export CSV</Button>
+          <Button variant="secondary" icon={<Download size={16}/>} onClick={()=>exportExcel('campaigns_export.xlsx','Campaigns',['Campaign Name','Client','Sender ID','Template','Route Plan','Recipients','Sent','Delivered','Failed','Status','Send Type','Scheduled','Started','Completed','Currency','Client Rate','Supplier Rate','Profit/SMS','Created'],filtered.map(c=>[c.campaign_name,clients.find(x=>x.id===c.client_id)?.company_name||'',c.sender_id,c.message_template,routePlans.find(x=>x.id===c.route_plan_id)?.plan_name||'',String(c.recipients_count),String(c.sent_count),String(c.delivered_count),String(c.failed_count),c.status,c.send_type,c.scheduled_at||'',c.started_at||'',c.completed_at||'',c.currency,c.client_rate.toFixed(6),c.supplier_rate.toFixed(6),c.profit.toFixed(4),new Date(c.created_at).toISOString().split('T')[0]]))}>Export Excel</Button>
+          <Button icon={<Plus size={18}/>} onClick={()=>setShowCreate(true)}>Create Campaign</Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
@@ -144,7 +149,7 @@ export const CampaignsPage: React.FC = () => {
 
       <Card><div className="relative"><Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/><input type="text" placeholder="Search campaigns..." value={search} onChange={e=>setSearch(e.target.value)} className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/></div></Card>
 
-      <Card noPadding><Table columns={columns} data={paginated} keyExtractor={c=>c.id}/><Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} totalItems={filtered.length} itemsPerPage={itemsPerPage}/></Card>
+      <Card noPadding><Table columns={columns} data={paginated} keyExtractor={c=>c.id} /><Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} totalItems={filtered.length} itemsPerPage={itemsPerPage}/></Card>
 
       {/* Create Campaign Modal */}
       <Modal isOpen={showCreate} onClose={()=>setShowCreate(false)} title="Create Campaign (Bulk SMS)" size="lg" footer={<div className="flex justify-between w-full"><Button variant="secondary" icon={<Upload size={14}/>} onClick={()=>setShowUpload(true)}>Upload Numbers ({uploadedNumbers.length})</Button><div className="flex gap-3"><Button variant="secondary" onClick={()=>setShowCreate(false)}>Cancel</Button><Button onClick={handleCreate} disabled={uploadedNumbers.length===0}>Create Campaign</Button></div></div>}>

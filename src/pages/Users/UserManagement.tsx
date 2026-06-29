@@ -7,6 +7,7 @@ import { Badge } from '../../components/UI/Badge';
 import { Table, Pagination } from '../../components/UI/Table';
 import { Modal } from '../../components/UI/Modal';
 import { Input, Select } from '../../components/UI/Input';
+import { useToast } from '../../components/UI/Toast';
 
 const roleLabels: Record<string,string> = { super_admin:'Super Admin', admin:'Admin', support:'Support', billing:'Billing', agent:'Agent', client:'Client', supplier:'Supplier' };
 
@@ -46,6 +47,7 @@ const DEFAULT_PERMISSIONS: Record<string, string[]> = {
 };
 
 export const UserManagement: React.FC = () => {
+  const { addToast } = useToast();
   const { getVisibleUsers, addUser, updateUser, deleteUser, toggleUserBlock, resetPassword, changeOwnPassword, user: currentUser } = useAuth();
   const users = getVisibleUsers();
   const isSuperAdmin = currentUser?.role === 'super_admin';
@@ -66,6 +68,7 @@ export const UserManagement: React.FC = () => {
   const [form, setForm] = useState({ username:'', password:'', email:'', role:'client' as User['role'], name:'' });
   const [search, setSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const itemsPerPage = 15;
 
   const filtered = users.filter(u => u.username.toLowerCase().includes(search.toLowerCase()) || u.email.toLowerCase().includes(search.toLowerCase()));
@@ -81,25 +84,25 @@ export const UserManagement: React.FC = () => {
   
   const openEdit = (u: User) => {
     // Admin can only edit non-super_admin users
-    if (!isSuperAdmin && u.role === 'super_admin') { alert('You cannot edit Super Admin users'); return; }
+    if (!isSuperAdmin && u.role === 'super_admin') { addToast('error', 'You cannot edit Super Admin users'); return; }
     setEditing(u); setForm({ username:u.username, password:'', email:u.email, role:u.role, name:u.name||'' }); setShowModal(true);
   };
 
   const openPermissions = (u: User) => {
     // Admin can only edit permissions of non-super_admin users
-    if (!isSuperAdmin && u.role === 'super_admin') { alert('You cannot modify Super Admin permissions'); return; }
+    if (!isSuperAdmin && u.role === 'super_admin') { addToast('error', 'You cannot modify Super Admin permissions'); return; }
     setPermissionTarget(u); setSelectedPerms([...u.permissions]); setShowPermissionModal(true);
   };
 
   const handleSave = () => {
-    if (!form.username || !form.email) { alert('Username and Email required'); return; }
+    if (!form.username || !form.email) { addToast('error', 'Username and Email required'); return; }
     // Admin cannot set role to super_admin
-    if (!isSuperAdmin && form.role === 'super_admin') { alert('Only Super Admin can create Super Admin accounts'); return; }
+    if (!isSuperAdmin && form.role === 'super_admin') { addToast('error', 'Only Super Admin can create Super Admin accounts'); return; }
     if (editing) {
       updateUser(editing.id, { username:form.username, email:form.email, role:form.role, name:form.name });
       if (form.password) resetPassword(editing.id, form.password);
     } else {
-      if (!form.password) { alert('Password required'); return; }
+      if (!form.password) { addToast('error', 'Password required'); return; }
       addUser({ username:form.username, email:form.email, role:form.role, name:form.name, permissions: DEFAULT_PERMISSIONS[form.role] || [] }, form.password);
     }
     setShowModal(false);
@@ -111,11 +114,11 @@ export const UserManagement: React.FC = () => {
     setShowPermissionModal(false);
   };
 
-  const handleChangeOwnPassword = () => {
+  const handleChangeOwnPassword = async () => {
     if (!ownCurrentPwd || !ownNewPwd) { setOwnPwdError('Both fields required'); return; }
     if (ownNewPwd.length < 4) { setOwnPwdError('Password too short (min 4)'); return; }
-    const ok = changeOwnPassword(ownCurrentPwd, ownNewPwd);
-    if (ok) { setShowOwnPwdModal(false); setOwnCurrentPwd(''); setOwnNewPwd(''); setOwnPwdError(''); alert('Password changed successfully!'); }
+    const ok = await changeOwnPassword(ownCurrentPwd, ownNewPwd);
+    if (ok) { setShowOwnPwdModal(false); setOwnCurrentPwd(''); setOwnNewPwd(''); setOwnPwdError(''); addToast('success', 'Password changed successfully!'); }
     else { setOwnPwdError('Current password is incorrect'); }
   };
 
@@ -124,15 +127,22 @@ export const UserManagement: React.FC = () => {
   };
 
   const handleBlockUser = (u: User) => {
-    if (!isSuperAdmin && u.role === 'super_admin') { alert('You cannot block Super Admin users'); return; }
-    if (u.id === currentUser?.id) { alert('Cannot block yourself'); return; }
+    if (!isSuperAdmin && u.role === 'super_admin') { addToast('error', 'You cannot block Super Admin users'); return; }
+    if (u.id === currentUser?.id) { addToast('error', 'Cannot block yourself'); return; }
     toggleUserBlock(u.id);
   };
 
-  const handleDeleteUser = (u: User) => {
-    if (!isSuperAdmin && u.role === 'super_admin') { alert('You cannot delete Super Admin users'); return; }
-    if (u.id === currentUser?.id) { alert('Cannot delete yourself'); return; }
-    if (window.confirm(`Delete "${u.username}"? This cannot be undone.`)) deleteUser(u.id);
+  const handleDeleteUser = async (u: User) => {
+    if (!isSuperAdmin && u.role === 'super_admin') { addToast('error', 'You cannot delete Super Admin users'); return; }
+    if (u.id === currentUser?.id) { addToast('error', 'Cannot delete yourself'); return; }
+    if (window.confirm(`Delete "${u.username}"? This cannot be undone.`)) {
+      setDeletingId(u.id);
+      try {
+        await deleteUser(u.id);
+      } finally {
+        setDeletingId(null);
+      }
+    }
   };
 
   const columns = [
@@ -144,9 +154,9 @@ export const UserManagement: React.FC = () => {
     {key:'actions',header:'Actions',render:(u:User)=><div className="flex gap-0.5">
       {(isSuperAdmin || u.role !== 'super_admin') && <button onClick={()=>openEdit(u)} className="p-1 rounded hover:bg-gray-100" title="Edit"><Edit size={14} className="text-gray-500"/></button>}
       <button onClick={()=>openPermissions(u)} className="p-1 rounded hover:bg-gray-100" title="Permissions"><Settings size={14} className="text-indigo-500"/></button>
-      <button onClick={()=>{if(!isSuperAdmin&&u.role==='super_admin'){alert('Not allowed');return;}setPwdTarget(u);setNewPwd('');setShowPwdModal(true);}} className="p-1 rounded hover:bg-gray-100" title="Reset Password"><Shield size={14} className="text-yellow-500"/></button>
+      <button onClick={()=>{if(!isSuperAdmin&&u.role==='super_admin'){addToast('error', 'Not allowed');return;}setPwdTarget(u);setNewPwd('');setShowPwdModal(true);}} className="p-1 rounded hover:bg-gray-100" title="Reset Password"><Shield size={14} className="text-yellow-500"/></button>
       {(isSuperAdmin || u.role !== 'super_admin') && <button onClick={()=>handleBlockUser(u)} className={`p-1 rounded hover:bg-gray-100 ${u.is_active?'text-red-500':'text-green-500'}`} title={u.is_active?'Block':'Unblock'}>{u.is_active?<X size={14}/>:<AlertTriangle size={14}/>}</button>}
-      {(isSuperAdmin || u.role !== 'super_admin') && <button onClick={()=>handleDeleteUser(u)} className="p-1 rounded hover:bg-gray-100" title="Delete"><Trash2 size={14} className="text-red-500"/></button>}
+      {(isSuperAdmin || u.role !== 'super_admin') && <button onClick={()=>handleDeleteUser(u)} className="p-1 rounded hover:bg-gray-100" title="Delete" disabled={deletingId === u.id}><Trash2 size={14} className={`text-red-500 ${deletingId === u.id ? 'opacity-50' : ''}`}/></button>}
     </div>},
   ];
 

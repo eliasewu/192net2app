@@ -2,7 +2,7 @@
 
 export type UserRole = 'super_admin' | 'admin' | 'support' | 'billing' | 'agent' | 'client' | 'supplier';
 
-export type ConnectionType = 'smpp' | 'http' | 'rcs' | 'flash_sms' | 'ott_whatsapp' | 'ott_telegram' | 'voice_otp' | 'local_bypass';
+export type ConnectionType = 'smpp' | 'http' | 'rcs' | 'flash_sms' | 'ott_whatsapp' | 'ott_telegram' | 'voice_otp' | 'local_bypass' | 'email';
 
 export type BillingMode = 'submit' | 'dlr';
 
@@ -12,7 +12,7 @@ export type TrunkType = 'sim_otp' | 'sim_marketing' | 'voice_otp' | 'local_direc
 
 export type RouteMethod = 'percentage' | 'lcr' | 'priority';
 
-export type SMSStatus = 'pending' | 'sent' | 'delivered' | 'failed' | 'expired' | 'rejected';
+export type SMSStatus = 'pending' | 'sent' | 'delivered' | 'failed' | 'expired' | 'rejected' | 'submitted';
 
 export type BindStatus = 'bound' | 'unbound' | 'binding' | 'error';
 
@@ -48,10 +48,22 @@ export interface Client {
   api_enabled: boolean;
   webhook_url: string;
   force_dlr: boolean;
+  /** How force-DLR timeout is determined:
+   *  'fixed'       — use dlr_timeout seconds (default 150)
+   *  'random_0_5'  — random 0–5 seconds for testing
+   *  'random_0_10' — random 0–10 seconds for testing */
+  force_dlr_timeout_mode: 'fixed' | 'random_0_5' | 'random_0_10';
+  dlr_timeout: number;
+  
+  // Connection type — determines how client submits messages
+  connection_type?: ConnectionType;
+  api_connector_id?: string | null;
+  voice_otp_config_id?: string | null;
+  whatsapp_device_ids?: string[];
+  telegram_device_ids?: string[];
   
   // Routing
   routing_plan_id: string | null;
-  rate_plan_id: string | null;
   
   status: 'active' | 'inactive' | 'suspended';
   created_at: string;
@@ -75,6 +87,39 @@ export interface Supplier {
   smpp_username: string;
   smpp_password: string;
   system_id: string;
+  /**
+   * SMPP protocol-version preference for the bind_transceiver PDU's
+   * `interface_version` byte. `auto` lets the Java 21 SMPP gateway
+   * pick (typically the highest supported). Strings like '3.3', '3.4',
+   * '5.0' map to bytes 0x33, 0x34, 0x50 respectively.
+   */
+  smpp_version?: 'auto' | '3.3' | '3.4' | '5.0';
+
+  /**
+   * When true the supplier connects TO us (ESME client role) instead of us
+   * dialling out to them. Required for GSM gateways (eJoin, Skyline) behind
+   * NAT that don't have a public IP. The supplier authenticates via its
+   * smpp_username / smpp_password on the ESME port.
+   */
+  is_inbound?: boolean;
+
+  /**
+   * SMPP system_type sent in the bind PDU. Per-SMSC configurable:
+   * - "" (empty) for EIMS and most modern SMSCs
+   * - "CMT" for legacy SMSCs that require it
+   * - "SMPP", "VMA", or custom for specific providers
+   * Defaults to empty string for maximum compatibility.
+   */
+  smpp_system_type?: string;
+
+  /** SMPP bind type: trx=transceiver, tx=transmitter only, rx=receiver only. */
+  smpp_bind_type?: 'trx' | 'tx' | 'rx';
+  /** Type of Number for address_range in bind PDU. 0=UNKNOWN, 1=INTERNATIONAL, 2=NETWORK_SPECIFIC, 5=ALPHANUMERIC. */
+  smpp_addr_ton?: number;
+  /** Numbering Plan Indicator for address_range. 0=UNKNOWN, 1=ISDN. */
+  smpp_addr_npi?: number;
+  /** Address range: 'system_id' (use systemId), '' (empty), or 'null'. */
+  smpp_addr_range?: string;
   
   // HTTP API
   api_url: string;
@@ -85,6 +130,11 @@ export interface Supplier {
   balance: number;
   credit_limit: number;
   currency: Currency;
+  
+  // DLR
+  force_dlr: boolean;
+  force_dlr_timeout_mode: 'fixed' | 'random_0_5' | 'random_0_10';
+  dlr_timeout: number;
   
   // Status
   bind_status: BindStatus;
@@ -129,10 +179,13 @@ export interface RoutePlan {
 export interface RouteMap {
   id: string;
   client_id: string;
-  route_plan_id: string;
-  mccmnc: string;
+  route_id: string;
+  supplier_id: string;
+  mccmnc_pattern: string;
   priority: number;
+  percentage: number;
   is_active: boolean;
+  created_at?: string;
 }
 
 // ==================== RATES ====================
@@ -229,11 +282,23 @@ export interface SMSLog {
   status: SMSStatus;
   dlr_status: string | null;
   dlr_timestamp: string | null;
+  dlr_result: string | null;
+  dlr_response_time: number | null;
+  dlr_duration: number | null;
   error_code: string | null;
   error_message: string | null;
   
   route_name: string | null;
   trunk_name: string | null;
+  trunk_id: number | null;
+  
+  smpp_message_id: string | null;
+  registered_delivery: number | null;
+  data_coding: number | null;
+  esm_class: number | null;
+  channel: string | null;
+  source: string | null;
+  dlr_callback_url: string | null;
   
   submit_time: string;
   delivery_time: string | null;
@@ -253,6 +318,18 @@ export interface Translation {
   route_id: string | null;
   is_active: boolean;
   created_at: string;
+}
+
+// ==================== SMTP CONFIG ====================
+
+export interface SMTPConfig {
+  host: string;
+  port: number;
+  encryption: 'tls' | 'ssl' | 'none';
+  username: string;
+  password: string;
+  from_email: string;
+  from_name: string;
 }
 
 // ==================== EMAIL TEMPLATES ====================
@@ -372,6 +449,51 @@ export interface DashboardStats {
   profit_month: number;
   active_binds: number;
   total_binds: number;
+}
+
+// ==================== RESIDENTIAL PROXIES ====================
+export interface ResidentialProxy {
+  id: string;
+  name: string;
+  proxy_type: 'residential' | 'datacenter' | 'isp' | 'socks5';
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  public_ip: string;
+  is_active: boolean;
+  is_online: boolean;
+  last_heartbeat: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ==================== SOCIAL API SUPPLIERS ====================
+export interface SocialAPISupplier {
+  id: string;
+  name: string;
+  platform: 'whatsapp_cloud' | 'telegram_bot';
+  // WhatsApp Cloud API
+  phone_number_id: string;
+  business_account_id: string;
+  access_token: string;
+  webhook_verify_token: string;
+  // Telegram Bot API
+  bot_token: string;
+  bot_username: string;
+  // Residential Proxy
+  proxy_enabled: boolean;
+  proxy_host: string;
+  proxy_port: number;
+  proxy_username: string;
+  proxy_password: string;
+  proxy_type: 'residential' | 'datacenter' | 'isp';
+  // Status
+  is_active: boolean;
+  connection_status: 'connected' | 'disconnected' | 'error' | 'untested';
+  last_tested_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 // ==================== CAMPAIGN ====================

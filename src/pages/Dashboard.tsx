@@ -1,16 +1,17 @@
 import React from 'react';
-import { Users, Building2, MessageSquare, TrendingUp, DollarSign, Radio, CheckCircle, XCircle, Clock, AlertTriangle, Bell, CreditCard, Wifi, WifiOff, FileText, Send } from 'lucide-react';
+import { Users, MessageSquare, Radio, CheckCircle, XCircle, AlertTriangle, Bell, WifiOff, FileText, Download } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
 import { useData } from '../store/DataContext';
 import { Card } from '../components/UI/Card';
+import { Button } from '../components/UI/Button';
 import { StatCard } from '../components/UI/StatCard';
 import { Badge } from '../components/UI/Badge';
+import { exportCSV, exportExcel } from '../services/exportService';
 
 export const Dashboard: React.FC = () => {
   const { clients, suppliers, smsLogs, invoices, payments } = useData();
 
   // Real alert computation from data
-  const recentFailedSMS = smsLogs.filter(l => l.status === 'failed').slice(0, 15);
   const consecutiveFails = (() => {
     let count = 0;
     for (let i = smsLogs.length - 1; i >= 0; i--) {
@@ -84,7 +85,13 @@ export const Dashboard: React.FC = () => {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div><h1 className="text-2xl font-bold text-gray-800">Dashboard</h1><p className="text-gray-500 mt-1">Real-time platform overview from database</p></div>
-        <div className="flex items-center gap-2"><span className="text-sm text-gray-500">Last updated:</span><span className="text-sm font-medium text-gray-700">{new Date().toLocaleTimeString()}</span></div>
+        <div className="flex items-center gap-3">
+          <Button variant="secondary" size="sm" icon={<Download size={14}/>} onClick={()=>exportCSV('dashboard_stats.csv',['Metric','Value'],[['Total SMS',String(smsLogs.length)],['Delivered SMS',String(smsLogs.filter(l=>l.status==='delivered').length)],['Failed SMS',String(smsLogs.filter(l=>l.status==='failed').length)],['Active Clients',clients.filter(c=>c.status==='active').length+'/'+clients.length],['Active Binds',boundCount+'/'+(boundCount+unboundCount)],['Consecutive Failures',String(consecutiveFails)],['Low Balance Clients',String(lowBalanceClients.length)],['Channel Disconnects',String(blockedSuppliers.length)],['Pending Invoices',String(recentInvoices.length)],['Total Clients',String(clients.length)],['Total Suppliers',String(suppliers.length)],['Total Invoices',String(invoices.length)],['Total Payments',String(payments.length)]])}>Stats CSV</Button>
+          <Button variant="secondary" size="sm" icon={<Download size={14}/>} onClick={()=>exportExcel('dashboard_stats.xlsx','Dashboard Stats',['Metric','Value'],[['Total SMS',String(smsLogs.length)],['Delivered SMS',String(smsLogs.filter(l=>l.status==='delivered').length)],['Failed SMS',String(smsLogs.filter(l=>l.status==='failed').length)],['Active Clients',clients.filter(c=>c.status==='active').length+'/'+clients.length],['Active Binds',boundCount+'/'+(boundCount+unboundCount)],['Consecutive Failures',String(consecutiveFails)],['Low Balance Clients',String(lowBalanceClients.length)],['Channel Disconnects',String(blockedSuppliers.length)],['Pending Invoices',String(recentInvoices.length)],['Total Clients',String(clients.length)],['Total Suppliers',String(suppliers.length)],['Total Invoices',String(invoices.length)],['Total Payments',String(payments.length)]])}>Stats Excel</Button>
+          {alerts.length > 0 && <Button variant="secondary" size="sm" icon={<Download size={14}/>} onClick={()=>exportCSV('dashboard_alerts.csv',['Type','Title','Message','Time'],alerts.map(a=>[a.type,a.title,a.message,a.time]))}>Alerts CSV</Button>}
+          {alerts.length > 0 && <Button variant="secondary" size="sm" icon={<Download size={14}/>} onClick={()=>exportExcel('dashboard_alerts.xlsx','Dashboard Alerts',['Type','Title','Message','Time'],alerts.map(a=>[a.type,a.title,a.message,a.time]))}>Alerts Excel</Button>}
+          <span className="text-sm text-gray-500">Last updated:</span><span className="text-sm font-medium text-gray-700">{new Date().toLocaleTimeString()}</span>
+        </div>
       </div>
 
       {/* Stats */}

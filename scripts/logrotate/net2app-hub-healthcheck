@@ -1,0 +1,18 @@
+# ============================================================
+# /etc/logrotate.d/net2app-hub-healthcheck
+# ------------------------------------------------------------
+# healthcheck.sh appends one line per FAILED probe (and one
+# line per suppressed restart) to /var/log/net2app-hub-healthcheck.log.
+# Cadence is once per minute, so worst case is ~60 lines/min when
+# something is very wrong. Cap at 7 days to bound disk use.
+# ============================================================
+
+/var/log/net2app-hub-healthcheck.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 root root
+}

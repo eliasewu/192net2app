@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SMS Gateway</string>
+    <string name="settings_title">Connection Settings</string>
+    <string name="server_host">Server Host</string>
+    <string name="server_port">Server Port</string>
+    <string name="smpp_username">SMPP Username (System ID)</string>
+    <string name="smpp_password">SMPP Password</string>
+    <string name="save_settings">Save &amp; Reconnect</string>
+    <string name="status_bound">Bound to server</string>
+    <string name="status_unbound">Disconnected</string>
+    <string name="status_binding">Connecting…</string>
+    <string name="status_error">Error</string>
+    <string name="service_running">SMS Gateway is running</string>
+    <string name="sms_sent">SMS Sent</string>
+    <string name="sms_received">SMS Received</string>
+    <string name="sms_failed">SMS Failed</string>
+    <string name="dlr_received">DLRs Delivered</string>
+    <string name="uptime">Uptime</string>
+    <string name="tap_to_start">Tap START to connect to SMPP server</string>
+    <string name="start_gateway">Start Gateway</string>
+    <string name="stop_gateway">Stop Gateway</string>
+    <string name="notification_channel">SMS Gateway Service</string>
+    <string name="default_host">192.168.1.100</string>
+    <string name="default_port">2775</string>
+    <string name="log_title">Activity Log</string>
+    <string name="clear_logs">Clear Logs</string>
+    <string name="version_label">v1.0.0</string>
+    <string name="splash_brand">NET2APP</string>
+    <string name="splash_subtitle">SMS Gateway</string>
+    <string name="splash_loading">Connecting your gateway…</string>
+</resources>

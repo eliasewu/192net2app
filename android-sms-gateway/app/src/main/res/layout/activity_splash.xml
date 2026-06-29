@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  activity_splash.xml — visual design reference for Android Studio Layout Editor.
+  The actual UI is built programmatically in SplashActivity.java.
+-->
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:background="#1A73E8">
+
+    <!-- NET2APP brand -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="NET2APP"
+        android:textSize="42sp"
+        android:textColor="#FFFFFF"
+        android:gravity="center" />
+
+    <View
+        android:layout_width="1dp"
+        android:layout_height="12dp" />
+
+    <!-- Subtitle -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="SMS Gateway"
+        android:textSize="16sp"
+        android:textColor="#CCFFFFFF"
+        android:gravity="center"
+        android:letterSpacing="0.15" />
+
+    <View
+        android:layout_width="1dp"
+        android:layout_height="36dp" />
+
+    <!-- SMS gateway icon (emoji) -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="📱→📩"
+        android:textSize="32sp"
+        android:gravity="center" />
+
+    <View
+        android:layout_width="1dp"
+        android:layout_height="36dp" />
+
+    <!-- Loading message -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Connecting your gateway..."
+        android:textSize="13sp"
+        android:textColor="#99FFFFFF"
+        android:gravity="center" />
+
+    <View
+        android:layout_width="1dp"
+        android:layout_height="48dp" />
+
+    <!-- Version -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="v1.0.0"
+        android:textSize="11sp"
+        android:textColor="#66FFFFFF"
+        android:gravity="center" />
+
+</LinearLayout>

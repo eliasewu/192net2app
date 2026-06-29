@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Send } from 'lucide-react';
 import { useData } from '../../store/DataContext';
+import { api } from '../../services/api';
 
 // WhatsApp/Telegram number validation API call
 function validateOTTNumber(n: string, ch: 'whatsapp'|'telegram'): Promise<{valid:boolean;msg:string}> {
@@ -37,6 +38,23 @@ export const TestSMS: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<TestResult[]>([]);
   const [validationLog, setValidationLog] = useState<string[]>([]);
+
+  // Cancellable-poll wiring. The DLR poll fans out setTimeouts that may outlive
+  // the component (e.g. user navigates away mid-poll). Use refs so the cleanup
+  // effect can cancel the latest poll without re-rendering.
+  const pollCancelledRef = React.useRef(false);
+  const pollTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Single unmount cleanup flips the cancellation flag + clears pending timer.
+  React.useEffect(() => {
+    return () => {
+      pollCancelledRef.current = true;
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -122,50 +140,86 @@ export const TestSMS: React.FC = () => {
     newResult.validation!.balance = `✅ €${balance.toFixed(2)}`;
     newResult.validation!.credit = `✅ €${creditLimit.toFixed(2)}`;
 
-    // Step 6: SEND SMS
-    await new Promise(r => setTimeout(r, 800));
-    const msgId = 'MSG' + Date.now();
-    setResults(prev => prev.map(r => r.id === newResult.id ? { ...r, status: 'sent' as const, message_id: msgId, route: rp.plan_name } : r));
-    setValidationLog(prev => [...prev, `[Send] ✅ Sent! Message ID: ${msgId}`]);
-
-    // Add to global CDR (SMS logs)
+    // Step 6: SEND SMS — actually POST to backend /sms/test.
+    setValidationLog(prev => [...prev, '[Send] POST /sms/test — submitting…']);
+    let msgId = 'MSG-PENDING';
+    try {
+      const sendResp: any = await addSMSLog({
+        message_id: msgId,
+        client_id: formData.client_id || '0',
+        client_code: client?.client_code || 'TEST',
+        supplier_code: suppliers[0]?.supplier_code || 'SUP001',
+        sender_id: formData.sender_id,
+        destination: formData.destination,
+        mcc: destMCC?.mcc || '000',
+        mnc: destMCC?.mnc || '00',
+        country: destMCC?.country || 'Unknown',
+        operator: destMCC?.operator || 'Unknown',
+        message: formData.message,
+        message_parts: Math.ceil(formData.message.length / 160),
+        client_rate: clientRateVal,
+        supplier_rate: supplierRateVal,
+        profit: profit,
+        currency: formData.currency,
+        status: 'sent',
+        route_name: rp.plan_name,
+        trunk_name: 'Direct',
+        supplier_id: undefined,
+        dlr_status: null,
+        dlr_timestamp: null,
+        delivery_time: null,
+        error_code: null,
+        error_message: null,
+      } as any);
+      msgId = sendResp?.data?.message_id || sendResp?.message_id || msgId;
+    } catch (sendErr: any) {
+      setValidationLog(prev => [...prev, `[Send] ❌ ${sendErr?.message || 'submit failed'}`]);
+      setResults(prev => prev.map(r => r.id === newResult.id ? { ...r, status: 'failed' as const, error: sendErr?.message || 'submit failed' } : r));
+      setLoading(false);
+      return;
+    }
     const routeName = rp.plan_name;
     const supplierName = suppliers[0]?.company_name || 'Auto';
-    addSMSLog({
-      message_id: msgId,
-      client_id: formData.client_id || '0',
-      client_code: client?.client_code || 'TEST',
-      supplier_code: suppliers[0]?.supplier_code || 'SUP001',
-      sender_id: formData.sender_id,
-      destination: formData.destination,
-      mcc: destMCC?.mcc || '000',
-      mnc: destMCC?.mnc || '00',
-      country: destMCC?.country || 'Unknown',
-      operator: destMCC?.operator || 'Unknown',
-      message: formData.message,
-      message_parts: Math.ceil(formData.message.length / 160),
-      client_rate: clientRateVal,
-      supplier_rate: supplierRateVal,
-      profit: profit,
-      currency: formData.currency,
-      status: 'sent',
-      route_name: routeName,
-      trunk_name: 'Direct',
-      supplier_id: undefined,
-      dlr_status: null,
-      dlr_timestamp: null,
-      delivery_time: null,
-      error_code: null,
-      error_message: null,
-    } as any);
+    setResults(prev => prev.map(r => r.id === newResult.id ? { ...r, status: 'sent' as const, message_id: msgId, route: routeName } : r));
+    setValidationLog(prev => [...prev, `[Send] ✅ Sent! Message ID: ${msgId}`]);
 
-    // Step 7: DLR Simulation
-    await new Promise(r => setTimeout(r, 1500 + Math.random() * 3000));
-    const delivered = Math.random() > 0.2;
-    setResults(prev => prev.map(r => r.id === newResult.id ? { ...r, status: delivered ? 'delivered' as const : 'failed' as const, latency: Math.floor(Math.random() * 2500 + 400), error: delivered ? undefined : 'Network timeout', supplier: supplierName } : r));
-    setValidationLog(prev => [...prev, `[DLR] ${delivered ? '✅ Delivered' : '❌ Failed'}`]);
-    
-    setLoading(false);
+    // Step 7: POLL real DLR via backend (1s tick for up to 30s).
+    setValidationLog(prev => [...prev, '[DLR] awaiting delivery receipt…']);
+    const startedAt = Date.now();
+    const POLL_MS = 1000;
+    const POLL_TIMEOUT_MS = 30000;
+    // Reset cancel flag for this submission — a fresh attempt starts a new poll.
+    pollCancelledRef.current = false;
+    const tick = async (): Promise<void> => {
+      if (pollCancelledRef.current) return;
+      if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
+        setValidationLog(prev => [...prev, '[DLR] ⚠ Timeout waiting for DLR (30s)']);
+        setResults(prev => prev.map(r => r.id === newResult.id ? { ...r, status: 'failed' as const, error: 'DLR not received in 30s', supplier: supplierName } : r));
+        setLoading(false);
+        return;
+      }
+      try {
+        const dlr: any = await api.get(`/sms/dlr/${msgId}`);
+        if (pollCancelledRef.current) return;
+        const status = (dlr?.data?.status || dlr?.status || '').toLowerCase();
+        const dlr_status = (dlr?.data?.dlr_status || dlr?.dlr_status || '').toUpperCase();
+        if (status === 'delivered' || dlr_status === 'DELIVERED') {
+          setResults(prev => prev.map(r => r.id === newResult.id ? { ...r, status: 'delivered' as const, supplier: supplierName, latency: Date.now() - startedAt } : r));
+          setValidationLog(prev => [...prev, '[DLR] ✅ Delivered']);
+          setLoading(false);
+          return;
+        }
+        if (status === 'failed' || dlr_status === 'FAILED' || dlr_status === 'REJECTED') {
+          setResults(prev => prev.map(r => r.id === newResult.id ? { ...r, status: 'failed' as const, error: dlr?.data?.error_message || dlr?.error_message || 'Delivery failed', supplier: supplierName } : r));
+          setValidationLog(prev => [...prev, '[DLR] ❌ Failed: ' + (dlr?.data?.error_message || dlr_status)]);
+          setLoading(false);
+          return;
+        }
+      } catch (_) { /* keep polling */ }
+      if (pollCancelledRef.current) return;
+      pollTimerRef.current = setTimeout(tick, POLL_MS);
+    };
+    void tick();
   };
 
   const getStatusBadge = (status: string) => {

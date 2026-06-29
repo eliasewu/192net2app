@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { Shield, Server, Users, MessageSquare, CheckCircle, XCircle, AlertTriangle, Copy, Plus, Edit, Trash2, Gauge, BarChart3, Key, Clock, Zap, Monitor, RefreshCw } from 'lucide-react';
 import { useAuth } from '../../store/AuthContext';
+import { api } from '../../services/api';
 import { Card } from '../../components/UI/Card';
 import { Button } from '../../components/UI/Button';
 import { Badge } from '../../components/UI/Badge';
 import { Modal } from '../../components/UI/Modal';
 import { Input, Select } from '../../components/UI/Input';
 import { Table } from '../../components/UI/Table';
+import { useToast } from '../../components/UI/Toast';
 
 // ============================================================
 // LICENSE PACKAGES
@@ -176,9 +178,26 @@ async function detectServerInfo(): Promise<{ ip: string; mac: string }> {
   return { ip, mac };
 }
 
-// Load/Save
-function load<T>(key: string, fallback: T): T { try { const s=localStorage.getItem(key); if(s) return JSON.parse(s); } catch{} return fallback; }
-function save<T>(key: string, v: T) { localStorage.setItem(key, JSON.stringify(v)); }
+// Load/Save via platform_settings API (replaces localStorage).
+// Both `license` and `license_tenants` are stored as JSON-stringified rows in the
+// `platform_settings` table (key/value). This keeps license state in the DB so
+// it survives cache, multiple browser sessions, and server restarts.
+async function loadPlatformSetting<T>(key: string, fallback: T): Promise<T> {
+  try {
+    const res: any = await api.get('/platform_settings');
+    const rows = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : []);
+    const row = rows.find((r: any) => r.key === key);
+    if (!row || !row.value) return fallback;
+    return JSON.parse(row.value) as T;
+  } catch { return fallback; }
+}
+async function savePlatformSetting(key: string, value: any): Promise<void> {
+  try {
+    await api.post('/platform_settings', { key, value: JSON.stringify(value) });
+  } catch (e: any) {
+    console.error(`[License] Failed to persist ${key}:`, e?.message || e);
+  }
+}
 
 // Default license — Trial 1000 SMS
 const defaultLicense: LicenseInfo = {
@@ -212,12 +231,31 @@ const defaultTenants: Tenant[] = [
 
 export const License: React.FC = () => {
   const { user, verifySuperAdmin } = useAuth();
+  const { addToast } = useToast();
   const isSuperUser = user?.role === 'super_admin';
-  const [license, setLicense] = useState<LicenseInfo>(() => load('license_active', defaultLicense));
-  const [tenants, setTenants] = useState<Tenant[]>(() => load('license_tenants', defaultTenants));
+  const [license, setLicense] = useState<LicenseInfo>(defaultLicense);
+  const [tenants, setTenants] = useState<Tenant[]>(defaultTenants);
   const [serverIP, setServerIP] = useState('');
   const [serverMAC, setServerMAC] = useState('');
   const [detecting, setDetecting] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+
+  // Hydrate from DB on mount — replace localStorage with platform_settings API.
+  useEffect(() => {
+    (async () => {
+      const [lic, ten] = await Promise.all([
+        loadPlatformSetting<LicenseInfo>('license', defaultLicense),
+        loadPlatformSetting<Tenant[]>('license_tenants', defaultTenants),
+      ]);
+      setLicense(prev => ({ ...lic, system_ip: prev.system_ip, system_mac: prev.system_mac, activated_at: prev.activated_at }));
+      setTenants(ten);
+      setHydrated(true);
+    })();
+  }, []);
+
+  // Persist license + tenants to DB on every change (after initial hydration).
+  useEffect(() => { if (hydrated) savePlatformSetting('license', license); }, [license, hydrated]);
+  useEffect(() => { if (hydrated) savePlatformSetting('license_tenants', tenants); }, [tenants, hydrated]);
 
   // Super admin verification
   const [superAuthModal, setSuperAuthModal] = useState(false);
@@ -247,7 +285,7 @@ export const License: React.FC = () => {
       // Auto-update license with detected IP/MAC if not set
       if (!license.system_ip || license.system_ip === '192.168.1.100') {
         const updated = { ...license, system_ip: ip, system_mac: mac };
-        setLicense(updated); save('license_active', updated);
+        setLicense(updated);
       }
     }).catch(() => {});
   }, []);
@@ -258,7 +296,7 @@ export const License: React.FC = () => {
     const { ip, mac } = await detectServerInfo();
     setServerIP(ip); setServerMAC(mac);
     setDetecting(false);
-    alert(`Server IP: ${ip}\nServer MAC: ${mac}`);
+    addToast('info', `Server IP: ${ip} | MAC: ${mac}`);
   };
 
   // Countdown timer
@@ -268,7 +306,6 @@ export const License: React.FC = () => {
         const daysUsed = Math.ceil((Date.now() - new Date(prev.activated_at).getTime()) / 86400000);
         const pkg = PACKAGES[prev.type];
         if (!pkg) return prev;
-        const totalDays = pkg.days + (prev.extended_at ? Math.ceil((new Date(prev.extended_at).getTime() - new Date(prev.activated_at).getTime()) / 86400000) : 0);
         if (prev.usage.days_used !== daysUsed) { return { ...prev, usage: { ...prev.usage, days_used: daysUsed } }; }
         return prev;
       });
@@ -277,17 +314,18 @@ export const License: React.FC = () => {
   }, []);
 
   const requireSuperAuth = (action: () => void) => {
-    if (!isSuperUser) { alert('🔒 Only SUPER ADMIN can perform this action.'); return; }
+    if (!isSuperUser) { addToast('error', 'Only SUPER ADMIN can perform this action.'); return; }
     setPendingAction(() => action); setSuperPassword(''); setAuthError(''); setSuperAuthModal(true);
   };
-  const confirmSuperAuth = () => {
-    if (verifySuperAdmin(superPassword)) { setSuperAuthModal(false); if (pendingAction) pendingAction(); setPendingAction(null); }
+  const confirmSuperAuth = async () => {
+    const verified = await verifySuperAdmin(superPassword);
+    if (verified) { setSuperAuthModal(false); if (pendingAction) pendingAction(); setPendingAction(null); }
     else { setAuthError('Invalid super admin password'); }
   };
 
   // Activate license — updates volumes + features automatically
   const handleActivate = () => {
-    if (!licenseKeyInput) { alert('Please enter a license key'); return; }
+    if (!licenseKeyInput) { addToast('error', 'Please enter a license key'); return; }
     // Parse key to determine package type
     const typeStr = licenseKeyInput.includes('-TRI-') ? 'trial' : licenseKeyInput.includes('-100K-') ? 'volume_100k' : licenseKeyInput.includes('-500K-') ? 'volume_500k' : licenseKeyInput.includes('-1M-') ? 'volume_1m' : licenseKeyInput.includes('-5M-') ? 'volume_5m' : licenseKeyInput.includes('-10M-') ? 'volume_10m' : licenseKeyInput.includes('-25M-') ? 'volume_25m' : licenseKeyInput.includes('-50M-') ? 'volume_50m' : 'trial';
     const pkg = PACKAGES[typeStr];
@@ -313,8 +351,8 @@ export const License: React.FC = () => {
       activated_at: new Date().toISOString(),
       usage: { sms_this_month: 0, sms_total: 0, days_used: 0 },
     };
-    setLicense(updated); save('license_active', updated); setShowActivate(false);
-    alert(`✅ License activated!\nPackage: ${pkg.name}\nSMS/Month: ${pkg.sms_monthly.toLocaleString()}\nMax TPS: ${pkg.max_tps}`);
+    setLicense(updated); setShowActivate(false);
+    addToast('success', `License activated! Package: ${pkg.name} | SMS/Month: ${pkg.sms_monthly.toLocaleString()} | Max TPS: ${pkg.max_tps}`);
   };
 
   // Extend volume — super user can add more SMS
@@ -327,8 +365,8 @@ export const License: React.FC = () => {
       extended_at: new Date().toISOString(),
       extension_sms: (license.extension_sms || 0) + extendSMS,
     };
-    setLicense(extended); save('license_active', extended); setShowExtendModal(false);
-    alert(`✅ Volume extended by ${extendSMS.toLocaleString()} SMS\nNew total: ${extended.limits.max_sms_monthly.toLocaleString()} SMS/Month`);
+    setLicense(extended); setShowExtendModal(false);
+    addToast('success', `Volume extended by ${extendSMS.toLocaleString()} SMS. New total: ${extended.limits.max_sms_monthly.toLocaleString()} SMS/Month`);
   };
 
   // Generate key — auto-fills IP/MAC from detection
@@ -344,7 +382,7 @@ export const License: React.FC = () => {
     for (let i = 0; i < 3; i++) { let part = ''; for (let j = 0; j < 4; j++) part += chars.charAt(Math.floor(Math.random() * chars.length)); k += part + (i < 2 ? '-' : ''); }
     setGeneratedKey(k);
   };
-  const copyKey = (text: string) => { navigator.clipboard.writeText(text); alert('Copied!'); };
+  const copyKey = (text: string) => { navigator.clipboard.writeText(text); addToast('success', 'Copied to clipboard!'); };
 
   // Tenant CRUD
   const openTenant = (t?: Tenant) => {
@@ -354,12 +392,12 @@ export const License: React.FC = () => {
   };
   const saveTenant = () => {
     requireSuperAuth(() => {
-      if (editingTenant) { setTenants(p => { const n = p.map(t => t.id === editingTenant.id ? { ...t, ...tenantForm } : t); save('license_tenants', n); return n; }); }
-      else { setTenants(p => { const n = [...p, { ...tenantForm, id: Date.now().toString(), status: 'active' as const, usage: { sms_this_month: 0, current_tps: 0, sms_today: 0 }, license_expiry: license.expiry_date, created_at: new Date().toISOString().split('T')[0] }]; save('license_tenants', n); return n; }); }
+      if (editingTenant) { setTenants(p => p.map(t => t.id === editingTenant.id ? { ...t, ...tenantForm } : t)); }
+      else { setTenants(p => [...p, { ...tenantForm, id: Date.now().toString(), status: 'active' as const, usage: { sms_this_month: 0, current_tps: 0, sms_today: 0 }, license_expiry: license.expiry_date, created_at: new Date().toISOString().split('T')[0] }]); }
       setShowTenantModal(false);
     });
   };
-  const deleteTenant = (id: string) => { requireSuperAuth(() => { setTenants(p => { const n = p.filter(t => t.id !== id); save('license_tenants', n); return n; }); }); };
+  const deleteTenant = (id: string) => { requireSuperAuth(() => { setTenants(p => p.filter(t => t.id !== id)); }); };
 
   const pkg = PACKAGES[license.type];
   const daysRemaining = Math.max(0, (pkg?.days || 30) - license.usage.days_used);

@@ -21,8 +21,8 @@ interface AuthContextType {
   deleteUser: (id: string) => void;
   toggleUserBlock: (id: string) => void;
   resetPassword: (id: string, newPassword: string) => void;
-  changeOwnPassword: (currentPassword: string, newPassword: string) => boolean;
-  verifySuperAdmin: (password: string) => boolean;
+  changeOwnPassword: (currentPassword: string, newPassword: string) => Promise<boolean>;
+  verifySuperAdmin: (password: string) => Promise<boolean>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -40,24 +40,42 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     } catch {}
   };
 
-  // On mount, check token and load users
+  // On mount: restore token from localStorage (api.ts constructor does this),
+  // then validate it by fetching the current user profile. If the token is
+  // expired/invalid the 401 handler in api.ts clears it silently.
   useEffect(() => {
-    const token = localStorage.getItem('auth_token');
-    const savedUser = localStorage.getItem('auth_user');
-    if (token && savedUser) {
-      try { setUser(JSON.parse(savedUser)); api.setToken(token); loadUsers(); } catch {}
+    const token = api.getToken();
+    if (token) {
+      // Quick validation: fetch /api/auth/me to confirm the token is still
+      // valid. If it 401s, clearTokenSilent drops it; otherwise set user.
+      api.get('/auth/me').then(res => {
+        if (res.success && res.user) {
+          setUser(res.user);
+          loadUsers();
+        }
+      }).catch((err) => {
+        // Token invalid/expired — api.ts already dropped it via clearTokenSilent.
+        // For non-401 errors, log a warning so operators can diagnose.
+        if (err && err.message !== 'Unauthorized') {
+          console.warn('[auth] session restore failed:', err.message || err);
+        }
+      }).finally(() => setIsLoading(false));
+    } else {
+      setIsLoading(false);
     }
-    setIsLoading(false);
   }, []);
 
   const login = async (username: string, password: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const response = await api.post('/auth/login', { username, password });
       if (response.success && response.token) {
-        localStorage.setItem('auth_token', response.token);
-        localStorage.setItem('auth_user', JSON.stringify(response.user));
         api.setToken(response.token);
         setUser(response.user);
+        // Populate AuthContext.usersDb (consumed by UserManagement via
+        // getVisibleUsers). DataContext.reloadAll will *also* fetch /api/users
+        // into its own `users` slot via the onTokenChange subscriber; this
+        // is a small redundant round trip but keeps the two contexts
+        // independent (no provider-order coupling).
         loadUsers();
         return { success: true };
       }
@@ -66,9 +84,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const logout = () => {
-    localStorage.removeItem('auth_token'); localStorage.removeItem('auth_user');
-    api.setToken(null); setUser(null); setUsersDb([]);
-    window.location.href = '/login';
+    api.setToken(null);
+    setUser(null);
+    setUsersDb([]);
+    // Use React Router navigation instead of full page reload.
+    // window.location is synchronous and Page may not have been
+    // imported yet; use a setTimeout to let state settle, then
+    // navigate via the DOM (avoids circular import of useNavigate).
+    setTimeout(() => {
+      window.location.href = '/login';
+    }, 0);
   };
 
   const hasPermission = (p: string) => {
@@ -86,45 +111,40 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   // User management via API
   const addUser = async (nu: any, pw: string) => {
-    try {
-      await api.post('/users', { ...nu, password: pw });
-      loadUsers();
-    } catch (e: any) { alert('Failed: ' + e.message); }
+    await api.post('/users', { ...nu, password: pw });
+    loadUsers();
   };
   const updateUser = async (id: string, data: any) => {
-    try {
-      await api.put('/users/' + id, data);
-      loadUsers();
-      if (user && user.id === id) {
-        const res = await api.get('/users');
-        if (res.success && res.data) {
-          const updated = res.data.find((u: User) => String(u.id) === String(id));
-          if (updated) { setUser(updated); localStorage.setItem('auth_user', JSON.stringify(updated)); }
-        }
+    await api.put('/users/' + id, data);
+    loadUsers();
+    if (user && user.id === id) {
+      const res = await api.get('/users');
+      if (res.success && res.data) {
+        const updated = res.data.find((u: User) => String(u.id) === String(id));
+        if (updated) { setUser(updated); }
       }
-    } catch (e: any) { alert('Failed: ' + e.message); }
+    }
   };
   const deleteUser = async (id: string) => {
-    if (user && user.id === id) { alert('Cannot delete yourself'); return; }
-    try { await api.delete('/users/' + id); loadUsers(); } catch (e: any) { alert('Failed: ' + e.message); }
+    if (user && user.id === id) { throw new Error('Cannot delete yourself'); }
+    await api.delete('/users/' + id);
+    loadUsers();
   };
   const toggleUserBlock = async (id: string) => {
     const target = usersDb.find(u => u.id === id);
     if (!target) return;
-    try { await api.put('/users/' + id, { is_active: !target.is_active }); loadUsers(); } catch (e: any) { alert('Failed: ' + e.message); }
+    await api.put('/users/' + id, { is_active: !target.is_active });
+    loadUsers();
   };
   const resetPassword = async (id: string, pw: string) => {
-    try { await api.put('/users/' + id, { password: pw }); alert('Password reset'); } catch (e: any) { alert('Failed: ' + e.message); }
+    await api.put('/users/' + id, { password: pw });
   };
   const changeOwnPassword = async (cp: string, np: string): Promise<boolean> => {
     if (!user) return false;
-    try {
-      const check = await api.post('/auth/login', { username: user.username, password: cp });
-      if (!check.success) { alert('Wrong current password'); return false; }
-      await api.put('/users/' + user.id, { password: np });
-      alert('Password changed');
-      return true;
-    } catch (e: any) { alert('Failed: ' + e.message); return false; }
+    const check = await api.post('/auth/login', { username: user.username, password: cp });
+    if (!check.success) return false;
+    await api.put('/users/' + user.id, { password: np });
+    return true;
   };
   const verifySuperAdmin = async (p: string): Promise<boolean> => {
     try { const r = await api.post('/auth/login', { username: 'admin', password: p }); return r.success; } catch { return false; }

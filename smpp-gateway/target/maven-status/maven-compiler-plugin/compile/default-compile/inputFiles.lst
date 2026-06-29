@@ -1,0 +1,8 @@
+/home/ubuntu/net2app-v3/smpp-gateway/src/main/java/com/net2app/smppgw/SmscManager.java
+/home/ubuntu/net2app-v3/smpp-gateway/src/main/java/com/net2app/smppgw/Main.java
+/home/ubuntu/net2app-v3/smpp-gateway/src/main/java/com/net2app/smppgw/BackendProxy.java
+/home/ubuntu/net2app-v3/smpp-gateway/src/main/java/com/net2app/smppgw/GatewayApi.java
+/home/ubuntu/net2app-v3/smpp-gateway/src/main/java/com/net2app/smppgw/EsmcServer.java
+/home/ubuntu/net2app-v3/smpp-gateway/src/main/java/com/net2app/smppgw/GatewayState.java
+/home/ubuntu/net2app-v3/smpp-gateway/src/main/java/com/net2app/smppgw/DlrRouter.java
+/home/ubuntu/net2app-v3/smpp-gateway/src/main/java/com/net2app/smppgw/SmscClient.java

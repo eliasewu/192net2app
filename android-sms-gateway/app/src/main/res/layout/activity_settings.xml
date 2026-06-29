@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  activity_settings.xml — visual design reference for Android Studio.
+  Actual UI built programmatically in SettingsActivity.java.
+-->
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Connection Settings"
+        android:textSize="20sp"
+        android:textColor="#202124"
+        android:paddingBottom="20dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Server Host (NET2APP Platform IP)"
+        android:textSize="13sp"
+        android:textColor="#5F6368"
+        android:paddingBottom="6dp" />
+
+    <EditText
+        android:id="@+id/hostInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="e.g. 192.168.1.100 or sms.example.com"
+        android:singleLine="true"
+        android:paddingBottom="12dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Server Port"
+        android:textSize="13sp"
+        android:textColor="#5F6368"
+        android:paddingBottom="6dp" />
+
+    <EditText
+        android:id="@+id/portInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="2775"
+        android:singleLine="true"
+        android:inputType="number"
+        android:paddingBottom="20dp" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#DADCE0"
+        android:layout_marginBottom="20dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="SMPP Username (System ID)"
+        android:textSize="13sp"
+        android:textColor="#5F6368"
+        android:paddingBottom="6dp" />
+
+    <EditText
+        android:id="@+id/usernameInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Your supplier SMPP username"
+        android:singleLine="true"
+        android:paddingBottom="12dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="SMPP Password"
+        android:textSize="13sp"
+        android:textColor="#5F6368"
+        android:paddingBottom="6dp" />
+
+    <EditText
+        android:id="@+id/passwordInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Your supplier SMPP password"
+        android:singleLine="true"
+        android:inputType="textPassword"
+        android:paddingBottom="20dp" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#DADCE0"
+        android:layout_marginBottom="16dp" />
+
+    <CheckBox
+        android:id="@+id/autoStartCheckbox"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Auto-start gateway on device boot"
+        android:layout_marginBottom="20dp" />
+
+    <Button
+        android:id="@+id/saveBtn"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Save &amp; Reconnect"
+        android:layout_marginBottom="12dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="The server IP and port are pre-configured for your NET2APP platform. Enter the SMPP username and password assigned to your supplier account on the platform, then save. The gateway will bind as a transceiver and begin routing SMS through your device's SIM card."
+        android:textSize="12sp"
+        android:textColor="#80868B" />
+
+</LinearLayout>

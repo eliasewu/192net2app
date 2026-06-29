@@ -4,9 +4,11 @@ import { Shield, Zap, Globe, Smartphone, CreditCard, BarChart3 } from 'lucide-re
 import { Button } from '../../components/UI/Button';
 import { Input, Select } from '../../components/UI/Input';
 import { Card } from '../../components/UI/Card';
+import { useToast } from '../../components/UI/Toast';
 
 export const LandingPage: React.FC = () => {
   const navigate = useNavigate();
+  const { addToast } = useToast();
   const [showStripe, setShowStripe] = useState(false);
   const [showPiprapay, setShowPiprapay] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState(99);
@@ -99,7 +101,7 @@ export const LandingPage: React.FC = () => {
         <div className="max-w-lg mx-auto px-4">
           <h2 className="text-2xl font-bold text-center mb-6">Get a Free Demo</h2>
           <Card>
-            <form className="space-y-3" onSubmit={e=>{e.preventDefault();alert('Demo request submitted!');}}>
+            <form className="space-y-3" onSubmit={e=>{e.preventDefault();addToast('success', 'Demo request submitted!');}}>
               <div className="grid grid-cols-2 gap-3"><Input label="Full Name" required /><Input label="Email" type="email" required /></div>
               <Input label="Company" />
               <Select label="Interested In" options={[{value:'sms',label:'SMS Platform'},{value:'voice',label:'Voice OTP'},{value:'whatsapp',label:'WhatsApp API'}]} />
@@ -120,10 +122,10 @@ export const LandingPage: React.FC = () => {
       </footer>
 
       {/* Stripe Modal */}
-      {showStripe&&<div className="fixed inset-0 z-50 flex items-center justify-center"><div className="absolute inset-0 bg-black/50" onClick={()=>setShowStripe(false)}/><div className="relative bg-white rounded-2xl p-6 w-full max-w-sm"><h3 className="font-bold text-lg mb-3">Pay with Stripe 💳</h3><p className="text-sm text-gray-600 mb-3">Plan: {paymentPlan} - €{paymentAmount}/mo</p><Input placeholder="4242 4242 4242 4242" /><Input placeholder="Cardholder Name" /><Button className="w-full mt-3" onClick={()=>{alert('Processing...');setShowStripe(false);}}>Pay €{paymentAmount}</Button></div></div>}
+      {showStripe&&<div className="fixed inset-0 z-50 flex items-center justify-center"><div className="absolute inset-0 bg-black/50" onClick={()=>setShowStripe(false)}/><div className="relative bg-white rounded-2xl p-6 w-full max-w-sm"><h3 className="font-bold text-lg mb-3">Pay with Stripe 💳</h3><p className="text-sm text-gray-600 mb-3">Plan: {paymentPlan} - €{paymentAmount}/mo</p><Input placeholder="4242 4242 4242 4242" /><Input placeholder="Cardholder Name" /><Button className="w-full mt-3" onClick={()=>{addToast('info', 'Processing payment...');setShowStripe(false);}}>Pay €{paymentAmount}</Button></div></div>}
 
       {/* Piprapay Modal */}
-      {showPiprapay&&<div className="fixed inset-0 z-50 flex items-center justify-center"><div className="absolute inset-0 bg-black/50" onClick={()=>setShowPiprapay(false)}/><div className="relative bg-white rounded-2xl p-6 w-full max-w-sm"><h3 className="font-bold text-lg mb-3">Pay with Piprapay 💰</h3><p className="text-sm text-gray-600 mb-3">Plan: {paymentPlan} - €{paymentAmount}/mo</p><Button className="w-full" onClick={()=>{alert('Redirecting to Piprapay...');setShowPiprapay(false);}}>Proceed to Piprapay</Button></div></div>}
+      {showPiprapay&&<div className="fixed inset-0 z-50 flex items-center justify-center"><div className="absolute inset-0 bg-black/50" onClick={()=>setShowPiprapay(false)}/><div className="relative bg-white rounded-2xl p-6 w-full max-w-sm"><h3 className="font-bold text-lg mb-3">Pay with Piprapay 💰</h3><p className="text-sm text-gray-600 mb-3">Plan: {paymentPlan} - €{paymentAmount}/mo</p><Button className="w-full" onClick={()=>{addToast('info', 'Redirecting to Piprapay...');setShowPiprapay(false);}}>Proceed to Piprapay</Button></div></div>}
     </div>
   );
 };

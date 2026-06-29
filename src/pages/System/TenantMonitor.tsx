@@ -6,8 +6,7 @@ import { Button } from '../../components/UI/Button';
 import { Badge } from '../../components/UI/Badge';
 import { Table, Pagination } from '../../components/UI/Table';
 import { Modal } from '../../components/UI/Modal';
-import { Input } from '../../components/UI/Input';
-import { exportCSV } from '../../services/exportService';
+import { exportCSV, exportExcel } from '../../services/exportService';
 
 // Tenant remote monitoring - collected via IP/MAC heartbeat protocol
 interface TenantRemote {
@@ -113,17 +112,12 @@ function generateTenants(): TenantRemote[] {
   return tenants.sort((a, b) => a.tenant_name.localeCompare(b.tenant_name));
 }
 
-const SAVED_KEY = 'tenant_monitor_data';
-function loadTenants(): TenantRemote[] {
-  try { const s = localStorage.getItem(SAVED_KEY); if (s) return JSON.parse(s); } catch {}
-  const data = generateTenants();
-  localStorage.setItem(SAVED_KEY, JSON.stringify(data));
-  return data;
-}
-
 export const TenantMonitor: React.FC = () => {
-  const { user, isSuperAdmin } = useAuth();
-  const [tenants, setTenants] = useState<TenantRemote[]>(loadTenants);
+  const { isSuperAdmin } = useAuth();
+  // Generate fresh demo tenants on each mount — no localStorage persistence.
+  // This page simulates tenant heartbeats from remote smpp-platform installs;
+  // the central DB has no source-of-truth for those stats. State is in-memory only.
+  const [tenants, setTenants] = useState<TenantRemote[]>(() => generateTenants());
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
@@ -155,7 +149,6 @@ export const TenantMonitor: React.FC = () => {
   const handleRefresh = async () => {
     setRefreshing(true);
     const fresh = generateTenants();
-    localStorage.setItem(SAVED_KEY, JSON.stringify(fresh));
     setTenants(fresh);
     setLastRefresh(new Date());
     setRefreshing(false);
@@ -286,12 +279,16 @@ export const TenantMonitor: React.FC = () => {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-800">Central Tenant Monitor</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold text-gray-800">Central Tenant Monitor</h1>
+            <Badge variant="warning" size="sm">Simulated Demo Data</Badge>
+          </div>
           <p className="text-gray-500 mt-1">
-            {isSuperAdmin() ? 
-              <span className="text-green-600 font-medium">🔒 Super Admin — Remote monitoring of {tenants.length} tenants</span> :
+            {isSuperAdmin() ?
+              <span className="text-green-600 font-medium">🔒 Super Admin — Remote monitoring of {tenants.length} tenants (SIM)</span> :
               <span className="text-red-600">⛔ Super Admin only</span>}
           </p>
+          <p className="text-[11px] text-gray-400 mt-0.5">Tenant heartbeats are simulated — real deployments push metrics to the central DB via the licensing heartbeat protocol.</p>
         </div>
         <div className="flex items-center gap-3">
           <span className="text-xs text-gray-500">Last sync: {lastRefresh.toLocaleTimeString()}</span>
@@ -300,6 +297,7 @@ export const TenantMonitor: React.FC = () => {
             ['Tenant','Code','IP','MAC','Status','License','Expiry','Days','SMS Used','SMS Limit','Usage%','TPS','CPU%','Mem%','Disk%','Clients','Suppliers','Binds','Version'],
             tenants.map(t => [t.tenant_name,t.tenant_code,t.remote_ip,t.remote_mac,t.status,t.license_type,t.license_expiry,String(t.days_remaining),String(t.sms_used_this_month),String(t.total_sms_limit),String(t.usage_percent),String(t.current_tps)+'/'+String(t.tps_limit),String(t.cpu_percent),String(t.memory_percent),String(t.disk_percent),String(t.active_clients),String(t.active_suppliers),String(t.active_binds),t.version])
           )}>Export CSV</Button>
+          <Button variant="secondary" icon={<Download size={16} />} onClick={() => exportExcel('tenants_monitor.xlsx','Central Tenant Monitor',['Tenant','Code','IP','MAC','Status','License','Expiry','Days','SMS Used','SMS Limit','Usage%','TPS','CPU%','Mem%','Disk%','Clients','Suppliers','Binds','Version'],tenants.map(t => [t.tenant_name,t.tenant_code,t.remote_ip,t.remote_mac,t.status,t.license_type,t.license_expiry,String(t.days_remaining),String(t.sms_used_this_month),String(t.total_sms_limit),String(t.usage_percent),String(t.current_tps)+'/'+String(t.tps_limit),String(t.cpu_percent),String(t.memory_percent),String(t.disk_percent),String(t.active_clients),String(t.active_suppliers),String(t.active_binds),t.version]))}>Export Excel</Button>
         </div>
       </div>
 
