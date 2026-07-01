@@ -25,13 +25,13 @@ export const ClientsList: React.FC = () => {
   const itemsPerPage = 10;
 
   const filteredClients = clients.filter(client => {
-    const matchesSearch = 
-      client.company_name.toLowerCase().includes(search.toLowerCase()) ||
-      client.client_code.toLowerCase().includes(search.toLowerCase()) ||
-      client.email.toLowerCase().includes(search.toLowerCase()) ||
-      (client.phone || '').toLowerCase().includes(search.toLowerCase()) ||
-      (client.country || '').toLowerCase().includes(search.toLowerCase()) ||
-      (client.smpp_ip || '').toLowerCase().includes(search.toLowerCase());
+    const matchesSearch =              client.company_name.toLowerCase().includes(search.toLowerCase()) ||
+              client.client_code.toLowerCase().includes(search.toLowerCase()) ||
+              client.email.toLowerCase().includes(search.toLowerCase()) ||
+              (client.phone || '').toLowerCase().includes(search.toLowerCase()) ||
+              (client.country || '').toLowerCase().includes(search.toLowerCase()) ||
+              (client.smpp_ip || '').toLowerCase().includes(search.toLowerCase()) ||
+              ((client as any).client_ips || '').toLowerCase().includes(search.toLowerCase());
     const matchesStatus = statusFilter === 'all' || client.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
@@ -104,16 +104,22 @@ export const ClientsList: React.FC = () => {
       ),
     },
     {
-      key: 'smpp_ip',
-      header: 'Allowed IP',
-      render: (client: Client) => (
-        <div className="flex items-center gap-1.5">
-          <Shield size={14} className={client.smpp_ip && client.smpp_ip !== '0.0.0.0' ? 'text-green-500' : 'text-gray-400'} />
-          <span className={`text-sm font-mono ${client.smpp_ip && client.smpp_ip !== '0.0.0.0' ? 'text-gray-700' : 'text-gray-400'}`}>
-            {client.smpp_ip && client.smpp_ip !== '0.0.0.0' ? client.smpp_ip : 'Any'}
-          </span>
-        </div>
-      ),
+      key: 'allowed_ips',
+      header: 'Allowed IPs',
+      render: (client: Client) => {
+        const ips: string[] = [];
+        if (client.smpp_ip && client.smpp_ip !== '0.0.0.0') ips.push(client.smpp_ip);
+        const multiIps = (client as any).client_ips;
+        if (multiIps) multiIps.split(/[,\n;]+/).filter(Boolean).forEach((ip: string) => ips.push(ip.trim()));
+        return (
+          <div className="flex items-center gap-1.5">
+            <Shield size={14} className={ips.length > 0 ? 'text-green-500' : 'text-gray-400'} />
+            <span className={`text-sm font-mono ${ips.length > 0 ? 'text-gray-700' : 'text-gray-400'}`}>
+              {ips.length > 0 ? `${ips.length} IP${ips.length !== 1 ? 's' : ''}` : 'Any'}
+            </span>
+          </div>
+        );
+      },
     },
     {
       key: 'smpp_username',

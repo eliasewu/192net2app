@@ -5,6 +5,19 @@
 -- Apply AFTER the base schema has been loaded.
 -- ============================================================
 
+-- ----- 0. Schema migrations versioning table (must be first) -----
+-- Tracks which migration statements have been applied so the boot-time
+-- runner can skip already-executed DDL. Each row stores the SHA-256
+-- hash of the statement text, applied_at timestamp, and an optional
+-- human-readable label for auditing.
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    id SERIAL PRIMARY KEY,
+    hash TEXT NOT NULL UNIQUE,
+    label TEXT,
+    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_schema_migrations_hash ON schema_migrations(hash);
+
 -- ----- 1. Number validation cache -----
 CREATE TABLE IF NOT EXISTS number_validation_results (
     id SERIAL PRIMARY KEY,
@@ -373,6 +386,32 @@ SELECT
 FROM smpp_sessions ss
   LEFT JOIN clients c ON ss.entity_type = 'client' AND ss.entity_id = c.id
   LEFT JOIN suppliers s ON ss.entity_type = 'supplier' AND ss.entity_id = s.id;
+
+-- ----- 28a. Extended translations columns (name, description, subtype, priority, apply_to, apply_entity_id) -----
+ALTER TABLE translations ADD COLUMN IF NOT EXISTS name VARCHAR(255) DEFAULT '';
+ALTER TABLE translations ADD COLUMN IF NOT EXISTS description TEXT DEFAULT '';
+ALTER TABLE translations ADD COLUMN IF NOT EXISTS subtype VARCHAR(50) DEFAULT '';
+ALTER TABLE translations ADD COLUMN IF NOT EXISTS priority INTEGER DEFAULT 1;
+ALTER TABLE translations ADD COLUMN IF NOT EXISTS apply_to VARCHAR(20) DEFAULT 'client';
+ALTER TABLE translations ADD COLUMN IF NOT EXISTS apply_entity_id VARCHAR(20) DEFAULT 'all';
+
+-- ----- 28b. Soft-delete columns for clients and suppliers -----
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT false;
+ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT false;
+
+-- ----- 28b2. Last error tracking on smpp_sessions -----
+-- Captures the most recent bind failure reason so the Bind Status
+-- page can show why a supplier is unbound or in error state.
+ALTER TABLE smpp_sessions ADD COLUMN IF NOT EXISTS last_error VARCHAR(500);
+ALTER TABLE smpp_sessions ADD COLUMN IF NOT EXISTS last_error_at TIMESTAMP;
+
+-- ----- 28c. Client multi-IP and connection_type columns -----
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS client_ips TEXT DEFAULT '';
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS connection_type VARCHAR(50) DEFAULT 'smpp';
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS api_connector_id INTEGER;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS voice_otp_config_id INTEGER;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS whatsapp_device_ids TEXT[] DEFAULT '{}';
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS telegram_device_ids TEXT[] DEFAULT '{}';
 
 -- ----- 29. bind_history — append-only event log for bind/unbind timeline -----
 -- Every bind lifecycle event (bound, unbound, error) creates a new row here.

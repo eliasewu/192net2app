@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Plus, Search, Download, Trash2, Edit, CheckSquare, Square, Mail, Clock, RefreshCw, Send } from 'lucide-react';
+import { Plus, Search, Download, Trash2, Edit, CheckSquare, Square, Mail, Clock, RefreshCw, Send, ToggleLeft, ToggleRight } from 'lucide-react';
 import { useData } from '../../store/DataContext';
 import { Card } from '../../components/UI/Card';
 import { Button } from '../../components/UI/Button';
@@ -49,16 +49,16 @@ export const SupplierRates: React.FC = () => {
   const itemsPerPage = 20;
 
   const supplierRates = allRates.filter(r => r.entity_type === 'supplier');
-  const countries = useMemo(() => [...new Set(mccmnc.map(m => m.country))].sort(), [mccmnc]);
+  const countries = useMemo(() => {
+    if (!mccmnc || !Array.isArray(mccmnc) || mccmnc.length === 0) return [];
+    return [...new Set(mccmnc.filter(m => m && m.country).map(m => m.country))].sort();
+  }, [mccmnc]);
   const filteredRates = supplierRates.filter(rate => {
     const ms = rate.country.toLowerCase().includes(search.toLowerCase()) || rate.mcc.includes(search);
     const mc = supplierFilter === 'all' || rate.entity_id === supplierFilter;
     const mco = countryFilter === 'all' || rate.country === countryFilter;
     return ms && mc && mco;
   });
-  const displayedRates = filterDir === 'none' ? filteredRates : filteredRates.filter(r => getChangeDir(r) === filterDir);
-  const totalPages = Math.ceil(displayedRates.length / itemsPerPage);
-  const paginatedRates = displayedRates.slice((currentPage-1)*itemsPerPage, currentPage*itemsPerPage);
 
   // Build lookup: most recent inactive rate per entity/destination pair
   const prevRateMap = useMemo(() => {
@@ -72,6 +72,23 @@ export const SupplierRates: React.FC = () => {
     });
     return map;
   }, [allRates]);
+
+  // Must be defined before displayedRates and dirCounts which call it.
+  // Uses prevRateMap (above) to determine rate change direction.
+  // NOTE: using function declaration (not const arrow) so esbuild's scope
+  // hoisting can't create a TDZ by reordering declarations during minification.
+  function getChangeDir(r: Rate): 'increase'|'decrease'|'unchanged'|'new' {
+    const prev = prevRateMap.get(`${r.entity_type}|${r.entity_id}|${r.mcc}|${r.mnc}`);
+    if (!prev) return 'new';
+    if (r.rate > prev.rate) return 'increase';
+    if (r.rate < prev.rate) return 'decrease';
+    return 'unchanged';
+  }
+
+  const displayedRates = filterDir === 'none' ? filteredRates : filteredRates.filter(r => getChangeDir(r) === filterDir);
+  const totalPages = Math.ceil(displayedRates.length / itemsPerPage);
+  const paginatedRates = displayedRates.slice((currentPage-1)*itemsPerPage, currentPage*itemsPerPage);
+
   const getPrevRate = (r: Rate): Rate | null => {
     return prevRateMap.get(`${r.entity_type}|${r.entity_id}|${r.mcc}|${r.mnc}`) || null;
   };
@@ -93,15 +110,16 @@ export const SupplierRates: React.FC = () => {
     });
     return { inc, dec, unch, nw, all: filteredRates.length };
   }, [filteredRates]);
-  const getChangeDir = (r: Rate): 'increase'|'decrease'|'unchanged'|'new' => {
-    const prev = prevRateMap.get(`${r.entity_type}|${r.entity_id}|${r.mcc}|${r.mnc}`);
-    if (!prev) return 'new';
-    if (r.rate > prev.rate) return 'increase';
-    if (r.rate < prev.rate) return 'decrease';
-    return 'unchanged';
+  const getSupplierName = (id: string) => {
+    if (!id || !suppliers || !Array.isArray(suppliers)) return 'Unknown';
+    const s = suppliers.find(x => x.id === id);
+    if (!s) return `Deleted Supplier (${id})`;
+    return `${s.supplier_code || '?'} - ${s.company_name || 'Unknown'}`;
   };
-  const getSupplierName = (id: string) => { const s = suppliers.find(x => x.id === id); return s ? `${s.supplier_code} - ${s.company_name}` : 'Unknown'; };
-  const getSupplierEmail = (id: string) => { const s = suppliers.find(x => x.id === id); return s?.email || ''; };
+  const getSupplierEmail = (id: string) => {
+    if (!id || !suppliers) return '';
+    const s = suppliers.find(x => x.id === id); return s?.email || '';
+  };
 
   // Detect rate direction
   const getDirection = (oldRate: number, newRate: number): string => {
@@ -191,6 +209,10 @@ export const SupplierRates: React.FC = () => {
     setShowModal(false);
   };
 
+  const handleToggleRate = (rate: Rate) => {
+    updateRate(rate.id, { is_active: !rate.is_active });
+  };
+
   const handleBulkCountryUpdate = () => {
     if (!bulkNewRate || !supplierFilter || supplierFilter==='all') { addToast('error', 'Select a supplier and enter rate'); return; }
     let count=0;
@@ -277,7 +299,7 @@ export const SupplierRates: React.FC = () => {
     { key:'prev', header:'Prev Rate', align:'right' as const, render:(rate:Rate)=>{const prev=getPrevRate(rate);return prev?<div className="text-right"><p className="text-xs text-gray-400 line-through">€{prev.rate.toFixed(4)}</p><p className={`text-[10px] font-medium ${rate.rate>prev.rate?'text-red-500':rate.rate<prev.rate?'text-green-500':'text-gray-400'}`}>{prev.rate===0?`↑ New`:rate.rate>prev.rate?`↑ ${((rate.rate-prev.rate)/prev.rate*100).toFixed(1)}%`:rate.rate<prev.rate?`↓ ${((prev.rate-rate.rate)/prev.rate*100).toFixed(1)}%`:'→ 0%'}</p><p className="text-[10px] text-gray-400">{prev.effective_from?formatDate(prev.effective_from):''}</p></div>:<span className="text-xs text-gray-300">—</span>}},
     { key:'effective', header:'Effective', render:(rate:Rate) => <span className="text-xs">{formatDate(rate.effective_from)}</span> },
     { key:'status', header:'Status', render:(rate:Rate) => <Badge variant={rate.is_active?'success':'danger'} dot size="sm">{rate.is_active?'Active':'Inactive'}</Badge> },
-    { key:'actions', header:'', render:(rate:Rate) => <div className="flex gap-1">{rate.is_active&&<><button onClick={(e)=>{e.stopPropagation();openModal(rate);}} className="p-1 rounded hover:bg-gray-100"><Edit size={14} className="text-gray-500"/></button><button onClick={(e)=>{e.stopPropagation();handleSendNotification(rate);}} className="p-1 rounded hover:bg-gray-100"><Mail size={14} className="text-blue-500"/></button></>}<button onClick={(e)=>{e.stopPropagation();showRateHistory(rate);}} className="p-1 rounded hover:bg-gray-100"><Clock size={14} className="text-purple-500"/></button><button onClick={(e)=>{e.stopPropagation();deleteRate(rate.id);}} className="p-1 rounded hover:bg-gray-100"><Trash2 size={14} className="text-red-500"/></button></div> },
+    { key:'actions', header:'', render:(rate:Rate) => <div className="flex gap-1"><button onClick={(e)=>{e.stopPropagation();handleToggleRate(rate);}} className="p-1 rounded hover:bg-gray-100" title={rate.is_active ? 'Disable rate' : 'Enable rate'}>{rate.is_active ? <ToggleRight size={14} className="text-green-500" /> : <ToggleLeft size={14} className="text-gray-400" />}</button>{rate.is_active&&<><button onClick={(e)=>{e.stopPropagation();openModal(rate);}} className="p-1 rounded hover:bg-gray-100"><Edit size={14} className="text-gray-500"/></button><button onClick={(e)=>{e.stopPropagation();handleSendNotification(rate);}} className="p-1 rounded hover:bg-gray-100"><Mail size={14} className="text-blue-500"/></button></>}<button onClick={(e)=>{e.stopPropagation();showRateHistory(rate);}} className="p-1 rounded hover:bg-gray-100"><Clock size={14} className="text-purple-500"/></button><button onClick={(e)=>{e.stopPropagation();deleteRate(rate.id);}} className="p-1 rounded hover:bg-gray-100"><Trash2 size={14} className="text-red-500"/></button></div> },
   ];
 
   return (
@@ -293,7 +315,7 @@ export const SupplierRates: React.FC = () => {
       <Modal isOpen={showModal} onClose={()=>setShowModal(false)} title={editingRate?'Edit Rate':'Add New Rates (Multi-Operator)'} size="lg" footer={<div className="flex justify-between w-full"><span className="text-sm text-gray-500">{selectedMncs.includes('*') ? `All ${mccmnc.filter(m=>m.country===selectedCountry).length} operators` : `${selectedMncs.length} operators`} selected</span><div className="flex gap-3"><Button variant="secondary" onClick={()=>setShowModal(false)}>Cancel</Button><Button onClick={handleSubmit}>Add Rates</Button></div></div>}>
         <div className="space-y-4">
           {editingRate&&editingRate.is_active&&<div className="bg-yellow-50 p-3 rounded-lg text-sm text-yellow-700">⚠ This will deactivate current rate (€{editingRate.rate.toFixed(4)}) and create a new version.</div>}
-          <Select label="Supplier *" value={formData.entity_id} onChange={e=>setFormData(p=>({...p,entity_id:e.target.value}))} options={[{value:'',label:'Select Supplier'},...suppliers.map(s=>({value:s.id,label:`${s.supplier_code} - ${s.company_name}`}))]} required/>
+          <Select label="Supplier *" value={formData.entity_id} onChange={e=>setFormData(p=>({...p,entity_id:e.target.value}))} options={[{value:'',label:'Select Supplier'},...(suppliers || []).map(s=>({value:s.id,label:`${s.supplier_code || '?'} - ${s.company_name || 'Unknown'}`}))]} required/>
           <Select label="Country *" value={selectedCountry} onChange={e => onSelectCountry(e.target.value)} options={[{value:'',label:'Select Country'},...countries.map(c=>({value:c,label:c}))]} required/>
           {selectedCountry && (
             <div className="bg-gray-50 rounded-lg p-4 max-h-60 overflow-y-auto">
@@ -305,7 +327,7 @@ export const SupplierRates: React.FC = () => {
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-2">
-                {mccmnc.filter(m => m.country === selectedCountry).map(op => (
+                {(mccmnc || []).filter(m => m && m.country === selectedCountry).map(op => (
                   <label key={op.mnc} className={`flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer transition text-sm ${selectedMncs.includes(op.mnc) || selectedMncs.includes('*') ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-200' : 'border-gray-200 hover:border-gray-300'}`}>
                     <input type="checkbox" checked={selectedMncs.includes(op.mnc) || selectedMncs.includes('*')} onChange={() => toggleMnc(op.mnc)} className="w-4 h-4 rounded border-gray-300 text-blue-600"/>
                     <div className="flex-1 min-w-0"><div className="flex items-center gap-1.5"><span className="font-mono font-semibold text-blue-700 text-sm">{op.mnc}</span><span className="text-gray-600 truncate text-sm">{op.operator}</span></div><span className="text-[10px] text-gray-400">MCC: {op.mcc} • {op.network_type}</span></div>

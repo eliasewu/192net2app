@@ -18,7 +18,7 @@ export const AddClient: React.FC = () => {
   
   const defaultForm = {
     client_code: '', company_name: '', contact_person: '', email: '', phone: '', address: '', country: '',
-    smpp_username: '', smpp_password: '', smpp_ip: '', smpp_port: 2775, system_type: 'SMPP', max_tps: 100,
+    smpp_username: '', smpp_password: '', smpp_ip: '', client_ips: '', smpp_port: 2775, system_type: 'SMPP', max_tps: 100,
     billing_mode: 'dlr' as BillingMode, currency: 'EUR' as Currency, balance: 0, credit_limit: 0,
     api_enabled: false, webhook_url: '', force_dlr: true, force_dlr_timeout_mode: 'fixed' as const, dlr_timeout: 150, routing_plan_id: '',
     status: 'active' as const,
@@ -30,7 +30,7 @@ export const AddClient: React.FC = () => {
     contact_person: existingClient.contact_person, email: existingClient.email,
     phone: existingClient.phone, address: existingClient.address, country: existingClient.country,
     smpp_username: existingClient.smpp_username, smpp_password: existingClient.smpp_password,
-    smpp_ip: existingClient.smpp_ip, smpp_port: existingClient.smpp_port,
+    smpp_ip: existingClient.smpp_ip, client_ips: (existingClient as any).client_ips || '', smpp_port: existingClient.smpp_port,
     system_type: existingClient.system_type, max_tps: existingClient.max_tps,
     billing_mode: existingClient.billing_mode, currency: existingClient.currency,
     balance: existingClient.balance, credit_limit: existingClient.credit_limit,
@@ -301,10 +301,19 @@ export const AddClient: React.FC = () => {
                 <div className="flex-1"><Input label="SMPP Password" type="text" value={formData.smpp_password} onChange={(e) => updateField('smpp_password', e.target.value)} placeholder="Generated password" error={errors.smpp_password} required /></div>
                 <button type="button" onClick={generatePassword} className="mt-7 p-2.5 bg-gray-100 rounded-lg hover:bg-gray-200"><RefreshCw size={18} className="text-gray-600" /></button>
               </div>
-              <Input label="Allowed IP" value={formData.smpp_ip} onChange={(e) => updateField('smpp_ip', e.target.value)} placeholder="192.168.1.100" hint="Leave empty to allow all IPs" />
-              <Input label="SMPP Port" type="number" value={formData.smpp_port} onChange={(e) => updateField('smpp_port', parseInt(e.target.value))} />
+              <Input label="Allowed IP (single)" value={formData.smpp_ip} onChange={(e) => updateField('smpp_ip', e.target.value)} placeholder="192.168.1.100" hint="Single IP (use Multi-IP field for more than one)" />
+              <Textarea label="Allowed IPs (multi)" value={formData.client_ips} onChange={(e) => updateField('client_ips', e.target.value)} placeholder="192.168.1.100&#10;10.0.0.50&#10;203.0.113.42" rows={3} />
+              <p className="text-xs text-gray-400 mt-1">Multiple IPs — one per line, or comma-separated. Connect to our SMPP port.</p>
               <Select label="System Type" value={formData.system_type} onChange={(e) => updateField('system_type', e.target.value)} options={[{ value: 'SMPP', label: 'SMPP' }, { value: 'HTTP', label: 'HTTP API' }, { value: 'BOTH', label: 'Both' }]} />
               <Input label="Max TPS" type="number" value={formData.max_tps} onChange={(e) => updateField('max_tps', parseInt(e.target.value))} hint="Maximum transactions per second" />
+              <div className="md:col-span-2">
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                  <p className="text-sm text-blue-700">
+                    <strong>Note:</strong> External clients connect to <strong>our</strong> SMPP port (default 2775). 
+                    No client-side port is needed — the Java 21 gateway handles both ESME (client) and SMSC (supplier) roles.
+                  </p>
+                </div>
+              </div>
             </div>
           </Card>
         )}

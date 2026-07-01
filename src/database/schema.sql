@@ -73,6 +73,7 @@ CREATE TABLE clients (
     smpp_username VARCHAR(100) UNIQUE NOT NULL,
     smpp_password VARCHAR(255) NOT NULL,
     smpp_ip VARCHAR(50) DEFAULT '0.0.0.0',
+    client_ips TEXT DEFAULT '',
     smpp_port INTEGER DEFAULT 2775,
     system_type VARCHAR(50) DEFAULT 'SMPP',
     max_tps INTEGER DEFAULT 100,
@@ -85,8 +86,14 @@ CREATE TABLE clients (
     force_dlr BOOLEAN DEFAULT false,
     dlr_timeout INTEGER DEFAULT 150,
     force_dlr_timeout_mode VARCHAR(20) DEFAULT 'fixed' CHECK (force_dlr_timeout_mode IN ('fixed','random_0_5','random_0_10')),
+    connection_type VARCHAR(50) DEFAULT 'smpp' CHECK (connection_type IN ('smpp','http','rcs','flash_sms','ott_whatsapp','ott_telegram','voice_otp','local_bypass')),
+    api_connector_id INTEGER,
+    voice_otp_config_id INTEGER,
+    whatsapp_device_ids TEXT[] DEFAULT '{}',
+    telegram_device_ids TEXT[] DEFAULT '{}',
     routing_plan_id INTEGER,
     rate_plan_id INTEGER,
+    is_deleted BOOLEAN DEFAULT false,
     status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active','inactive','suspended')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -140,6 +147,7 @@ CREATE TABLE suppliers (
     force_dlr BOOLEAN DEFAULT false,
     dlr_timeout INTEGER DEFAULT 150,
     force_dlr_timeout_mode VARCHAR(20) DEFAULT 'fixed' CHECK (force_dlr_timeout_mode IN ('fixed','random_0_5','random_0_10')),
+    is_deleted BOOLEAN DEFAULT false,
     status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active','inactive','suspended')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -445,6 +453,9 @@ CREATE TABLE smpp_sessions (
     connected_at TIMESTAMP,
     disconnected_at TIMESTAMP,
     last_activity TIMESTAMP,
+    -- Most recent bind failure reason (populated by esme_bind_event, disconnect, reconnect)
+    last_error VARCHAR(500),
+    last_error_at TIMESTAMP,
     bound_count INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(entity_type, entity_id)
@@ -574,6 +585,12 @@ CREATE TABLE translations (
     client_id INTEGER REFERENCES clients(id),
     supplier_id INTEGER REFERENCES suppliers(id),
     route_id INTEGER REFERENCES routes(id),
+    name VARCHAR(255) DEFAULT '',
+    description TEXT DEFAULT '',
+    subtype VARCHAR(50) DEFAULT '',
+    priority INTEGER DEFAULT 1,
+    apply_to VARCHAR(20) DEFAULT 'client',
+    apply_entity_id VARCHAR(20) DEFAULT 'all',
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

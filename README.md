@@ -167,7 +167,10 @@ sudo systemctl enable --now net2app-hub-healthcheck.timer
 
 | File | Description |
 |------|-------------|
-| [API_DOCUMENTATION.md](API_DOCUMENTATION.md) | Full REST API reference — send SMS, DLR, balance, supplier endpoints, code examples |
+| [HOW_TO.md](HOW_TO.md) | Sidebar-menu tutorial — step-by-step walkthrough of every feature, common workflows, first-time setup |
+| [REST_API.md](REST_API.md) | Complete REST API reference — all endpoints, auth, error codes, quick-reference |
+| [API_DOCUMENTATION.md](API_DOCUMENTATION.md) | External client API — send SMS, DLR, balance, code examples (cURL, Python, PHP, Node.js) |
+| [TRANSLATIONS.md](TRANSLATIONS.md) | Translation engine — SID masking, content replacement, destination formatting, pool modes, bulk upload |
 | [SMS_FLOW_AND_DATABASE_SCHEMA.md](SMS_FLOW_AND_DATABASE_SCHEMA.md) | SMS pipeline end-to-end + 26-table PostgreSQL schema |
 | [UI_FLOW.md](UI_FLOW.md) | Complete UI flow — 56 pages, navigation tree, component patterns |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Dev setup, typechecking, tests, pre-commit hook, CI details |

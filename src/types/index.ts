@@ -34,6 +34,7 @@ export interface Client {
   smpp_username: string;
   smpp_password: string;
   smpp_ip: string;
+  client_ips: string;
   smpp_port: number;
   system_type: string;
   max_tps: number;
@@ -316,6 +317,12 @@ export interface Translation {
   client_id: string | null;
   supplier_id: string | null;
   route_id: string | null;
+  name?: string;
+  description?: string;
+  subtype?: string;
+  priority?: number;
+  apply_to?: string;
+  apply_entity_id?: string;
   is_active: boolean;
   created_at: string;
 }

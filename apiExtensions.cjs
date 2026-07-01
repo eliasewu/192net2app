@@ -37,7 +37,7 @@ const _factory = function(app, pool, auth, roles) {
 // -----------------------------------------------------------------
 app.post('/api/sms/validate', auth, async (req, res) => {
   try {
-    const { client_id, destination, message } = req.body || {};
+    let { client_id, destination, message } = req.body || {};
     if (!client_id || !destination) return res.status(400).json({ error: 'client_id and destination required' });
     const cR = await pool.query("SELECT * FROM clients WHERE id=$1 AND status='active'", [client_id]);
     if (!cR.rows.length) return res.status(404).json({ error: 'Client not found' });
@@ -88,6 +88,17 @@ app.post('/api/sms/validate', auth, async (req, res) => {
       );
       if (sr.rows.length) supplierRate = parseFloat(sr.rows[0].rate);
     }
+
+    // Apply active translations so the parts/cost estimate reflects post-translation message length
+    const translated = await applyTranslations(pool, {
+      client_id,
+      supplier_id: supplier?.id || null,
+      route_id: routeId || null,
+      sender_id: '',
+      destination,
+      message,
+    });
+    message = translated.message;
 
     const parts = Math.ceil((message || '').length / 160) || 1;
     const profit = clientRate - supplierRate;
@@ -544,8 +555,26 @@ app.post('/api/voice-otp/send', auth, async (req, res) => {
     const b = req.body || {};
     if (!b.destination || !b.otp_code) return res.status(400).json({ error: 'destination and otp_code required' });
     const call_id = 'VOC' + Date.now() + Math.floor(Math.random() * 1000);
-    const max_retries = b.max_retries || 4;
+    const max_retries = b.max_retries || 1;
     const client_id = b.client_id || null;
+
+    // Auto-detect language from destination country prefix when not explicitly
+    // provided. Strip non-digit chars, try progressively shorter prefixes (up
+    // to 4 digits) against voice_otp_configs.country_prefix. Falls back to en-US.
+    let language = b.language || null;
+    if (!language) {
+      const digitsOnly = String(b.destination).replace(/[^0-9]/g, '');
+      // Try 4→3→2→1 digit prefixes for best-match country code
+      for (let len = Math.min(4, digitsOnly.length); len >= 1; len--) {
+        const prefix = digitsOnly.substring(0, len);
+        const match = await pool.query(
+          "SELECT language_code FROM voice_otp_configs WHERE country_prefix = $1 AND is_active = true LIMIT 1",
+          [prefix]
+        );
+        if (match.rows.length) { language = match.rows[0].language_code; break; }
+      }
+    }
+    language = language || 'en-US';
     // Schema has sip_call_id (not caller_id) and retry_count (not current_attempt).
     // client_id was added by multi_channel_migrations.sql so we can route the
     // synthetic voice DLR to the originating client (webhook + Java SMPP).
@@ -574,15 +603,15 @@ app.post('/api/voice-otp/send', auth, async (req, res) => {
       await conn.query(
         `INSERT INTO voice_otp_logs (call_id, destination, language, otp_code, sip_call_id, client_id, status, retry_count, max_retries, sip_server_id)
            VALUES ($1,$2,$3,$4,$5,$6,'initiated',0,$7,$8) RETURNING *`,
-        [call_id, b.destination, b.language || 'en-US', b.otp_code, b.caller_id || b.sip_call_id || null, client_id, max_retries, initialSrvId]
+        [call_id, b.destination, language, b.otp_code, b.caller_id || b.sip_call_id || null, client_id, max_retries, initialSrvId]
       );
       // Enqueue the initial Asterisk Originate so the 5-second poller (server.cjs)
-      // actually picks up the call on its next tick. max_retries=3 lets the
-      // poller escalate 1 -> 2 (wait 70s) -> 3 (wait 105s) -> terminal DLR.
+      // actually picks up the call on its next tick. max_retries=1 means
+      // the poller tries once immediately, then retries once (wait 60s) -> terminal DLR.
       await conn.query(
         `INSERT INTO voice_call_retry_queue (call_id, destination, otp_code, language, client_id, retry_count, max_retries, next_attempt_at, status, sip_server_id)
-         VALUES ($1, $2, $3, $4, $5, 0, 3, CURRENT_TIMESTAMP, 'pending', $6)`,
-        [call_id, b.destination, b.otp_code, b.language || 'en-US', client_id, initialSrvId]
+         VALUES ($1, $2, $3, $4, $5, 0, 1, CURRENT_TIMESTAMP, 'pending', $6)`,
+        [call_id, b.destination, b.otp_code, language, client_id, initialSrvId]
       );
       await conn.query('COMMIT');
     } catch (e) {
@@ -592,7 +621,7 @@ app.post('/api/voice-otp/send', auth, async (req, res) => {
       return res.status(500).json({ success: false, error: 'voice_otp enqueue failed: ' + e.message });
     }
     conn.release();
-    res.json({ success: true, data: { call_id, destination: b.destination, status: 'initiated', max_retries: 3, dial_queued: true, routed_to_server_id: initialSrvId, routed_to_server_name: initialSrv.name } });
+    res.json({ success: true, data: { call_id, destination: b.destination, status: 'initiated', max_retries: 1, dial_queued: true, routed_to_server_id: initialSrvId, routed_to_server_name: initialSrv.name } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -906,7 +935,7 @@ app.post('/api/voice-otp/retry-now', auth, roles('super_admin','admin','support'
       const call_id = 'VOC' + Date.now() + Math.floor(Math.random() * 1000);
       const ins = await pool.query(
         `INSERT INTO voice_otp_logs (call_id, destination, language, otp_code, sip_call_id, client_id, status, retry_count, max_retries)
-         VALUES ($1,$2,$3,$4,$5,$6,'retrying',$7,3) RETURNING *`,
+         VALUES ($1,$2,$3,$4,$5,$6,'retrying',$7,1) RETURNING *`,
         [call_id, b.destination, b.language, b.otp_code, b.caller_id || null, b.client_id || null, b.retry_count || 0]
       );
       logRow = ins.rows[0];
@@ -915,15 +944,15 @@ app.post('/api/voice-otp/retry-now', auth, roles('super_admin','admin','support'
     }
     // Stage the retry in voice_call_retry_queue with retry_count+1.
     const newRetry = (logRow.retry_count || 0) + 1;
-    if (newRetry > (logRow.max_retries || 3)) {
-      return res.json({ success: false, reason: 'max_retries_exceeded', max_retries: logRow.max_retries || 3 });
+    if (newRetry > (logRow.max_retries || 1)) {
+      return res.json({ success: false, reason: 'max_retries_exceeded', max_retries: logRow.max_retries || 1 });
     }
     // Wait seconds: retry 2 -> 70s, retry 3 -> 105s. retry 1 = inline, set in past.
     const waitSeconds = ({ 1: 0, 2: 70, 3: 105 })[newRetry] || 0;
     const nextAtSql = waitSeconds === 0 ? 'CURRENT_TIMESTAMP' : `CURRENT_TIMESTAMP + INTERVAL '${waitSeconds} seconds'`;
     await pool.query(
       `INSERT INTO voice_call_retry_queue (call_id, destination, otp_code, language, client_id, retry_count, max_retries, next_attempt_at, status)
-       VALUES ($1, $2, $3, $4, $5, $6, 3, ${nextAtSql}, 'waiting')`,
+       VALUES ($1, $2, $3, $4, $5, $6, 1, ${nextAtSql}, 'waiting')`,
       [logRow.call_id, logRow.destination, logRow.otp_code, logRow.language, logRow.client_id || null, newRetry]
     );
     await pool.query(`UPDATE voice_otp_logs SET retry_count=$1, status='retrying', next_retry_at=${nextAtSql} WHERE call_id=$2`,
@@ -1387,48 +1416,93 @@ app.get('/api/voice-otp/active-calls', auth, async (req, res) => {
 // -----------------------------------------------------------------
 // TRANSLATIONS  (apply, create rule, test, list)
 // -----------------------------------------------------------------
-function entityFilter(t, body) {
+function entityFilter(t, body, startIdx = 1) {
   // Match rules that are GLOBAL (all NULLs) or scoped to a specific
   // client/supplier/route. Returns the SQL fragment + params.
-  const where = []; const p = []; let i = 1;
+  // Accepts startIdx so callers can offset placeholder numbers to
+  // avoid collisions (e.g. ANY($1) in the outer query).
+  const where = []; const p = []; let i = startIdx;
   where.push(`(client_id IS NULL OR client_id = $${i++})`);     p.push(body.client_id || null);
   where.push(`(supplier_id IS NULL OR supplier_id = $${i++})`); p.push(body.supplier_id || null);
   where.push(`(route_id IS NULL OR route_id = $${i++})`);       p.push(body.route_id || null);
   return { where: where.join(' AND '), params: p };
 }
 
-app.post('/api/translations/apply', auth, async (req, res) => {
+// Shared translation engine — reusable by both the explicit
+// POST /api/translations/apply endpoint AND by the SMS send pipeline.
+// Accepts pool + { client_id, supplier_id, route_id, sender_id, destination, message }
+// Returns { sender_id, destination, message, applied[], applied_count }
+// NEVER throws; on DB failure returns the inputs unchanged.
+async function applyTranslations(pool, params) {
   try {
-    const b = req.body || {};
-    const filt = entityFilter(null, b);
+    const { client_id, supplier_id, route_id } = params;
+    const filt = entityFilter(null, { client_id, supplier_id, route_id }, 2);
     const rulesR = await pool.query(
       `SELECT * FROM translations
          WHERE translation_type = ANY($1) AND (${filt.where}) AND is_active = true
-         ORDER BY id ASC`,
+         ORDER BY priority ASC, id ASC`,
       [['sender_id','destination','content','origination'], ...filt.params]
     );
-    let sender_id = b.sender_id || '';
-    let destination = b.destination || '';
-    let message = b.message || '';
+    // If subttype is a pool mode (sender_id_masking / content_random_body),
+    // target_value is pipe-separated: pick one value at random instead of
+    // the literal pipe-delimited string.
+    function pickFromPool(val, subtype) {
+      if (!val || typeof val !== 'string') return val;
+      const poolModes = ['sender_id_masking', 'content_random_body'];
+      if (!poolModes.includes(subtype)) return val;
+      const parts = val.split('|').map(s => s.trim()).filter(Boolean);
+      if (parts.length <= 1) return parts[0] || val;
+      return parts[Math.floor(Math.random() * parts.length)];
+    }
+
+    let sender_id = params.sender_id || '';
+    let destination = params.destination || '';
+    let message = params.message || '';
     let applied = [];
     for (const r of rulesR.rows) {
       try {
         const re = new RegExp(r.source_pattern);
+        const target = pickFromPool(r.target_value, r.subtype);
         if (r.translation_type === 'sender_id' && re.test(sender_id)) {
-          sender_id = sender_id.replace(re, r.target_value);
-          applied.push({ id: r.id, type: r.translation_type, rule: r.source_pattern });
+          sender_id = sender_id.replace(re, target);
+          applied.push({ id: r.id, type: r.translation_type, subtype: r.subtype, rule: r.source_pattern });
         }
         if (r.translation_type === 'destination' && re.test(destination)) {
-          destination = destination.replace(re, r.target_value);
-          applied.push({ id: r.id, type: r.translation_type, rule: r.source_pattern });
+          destination = destination.replace(re, target);
+          applied.push({ id: r.id, type: r.translation_type, subtype: r.subtype, rule: r.source_pattern });
         }
         if ((r.translation_type === 'content' || r.translation_type === 'origination') && re.test(message)) {
-          message = message.replace(re, r.target_value);
-          applied.push({ id: r.id, type: r.translation_type, rule: r.source_pattern });
+          message = message.replace(re, target);
+          applied.push({ id: r.id, type: r.translation_type, subtype: r.subtype, rule: r.source_pattern });
         }
       } catch (e) { /* skip bad regex */ }
     }
-    res.json({ success: true, data: { sender_id, destination, message, applied, applied_count: applied.length } });
+    return { sender_id, destination, message, applied, applied_count: applied.length };
+  } catch (e) {
+    // DB failure: return inputs unchanged so SMS delivery is never blocked
+    console.warn('[translations] apply failed (non-blocking):', e.message);
+    return {
+      sender_id: params.sender_id || '',
+      destination: params.destination || '',
+      message: params.message || '',
+      applied: [],
+      applied_count: 0,
+    };
+  }
+}
+
+app.post('/api/translations/apply', auth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const result = await applyTranslations(pool, {
+      client_id: b.client_id || null,
+      supplier_id: b.supplier_id || null,
+      route_id: b.route_id || null,
+      sender_id: b.sender_id || '',
+      destination: b.destination || '',
+      message: b.message || '',
+    });
+    res.json({ success: true, data: result });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1438,11 +1512,21 @@ app.post('/api/translations', auth, roles('super_admin','admin'), async (req, re
     if (!b.translation_type || !b.source_pattern || b.target_value == null) {
       return res.status(400).json({ error: 'translation_type, source_pattern and target_value required' });
     }
-    // schema: translations has no priority column
+    // Infer client_id / supplier_id from apply_to + apply_entity_id for backwards compat
+    let clientId = b.client_id || null, supplierId = b.supplier_id || null;
+    if (b.apply_to && b.apply_entity_id && b.apply_entity_id !== 'all') {
+      const eid = parseInt(b.apply_entity_id, 10);
+      if (!isNaN(eid)) {
+        if (b.apply_to === 'client') { clientId = eid; supplierId = null; }
+        else if (b.apply_to === 'supplier') { clientId = null; supplierId = eid; }
+      }
+    }
     const r = await pool.query(
-      `INSERT INTO translations (translation_type, source_pattern, target_value, client_id, supplier_id, route_id, is_active)
-         VALUES ($1,$2,$3,$4,$5,$6,true) RETURNING *`,
-      [b.translation_type, b.source_pattern, b.target_value, b.client_id || null, b.supplier_id || null, b.route_id || null]
+      `INSERT INTO translations (translation_type, source_pattern, target_value, client_id, supplier_id, route_id,
+         name, description, subtype, priority, apply_to, apply_entity_id, is_active)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true) RETURNING *`,
+      [b.translation_type, b.source_pattern, b.target_value, clientId, supplierId, b.route_id || null,
+       b.name || '', b.description || '', b.subtype || '', b.priority || 1, b.apply_to || 'client', b.apply_entity_id || 'all']
     );
     res.json({ success: true, data: r.rows[0] });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1473,6 +1557,113 @@ app.post('/api/translations/list', auth, async (req, res) => {
     q += ' ORDER BY id LIMIT 500';
     const r = await pool.query(q, p);
     res.json({ success: true, data: r.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Bulk upload: accepts CSV or TXT file, creates multiple translation rules.
+// Two modes:
+//   - Pool mode (content_random_body / sender_id_masking): one value per line,
+//     all combined into a single translation with pipe-separated replacement.
+//   - General CSV mode: columns name,type,pattern,replacement,priority,description.
+//     Each row becomes a separate translation rule.
+const bulkUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+app.post('/api/translations/bulk', auth, roles('super_admin','admin'), bulkUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'File required (multipart field "file")' });
+    const b = req.body || {};
+    const subtype = b.type || 'content_random_body';
+    const applyTo = b.apply_to || 'client';
+    const applyEntityId = b.apply_entity_id || 'all';
+    const poolMode = ['content_random_body', 'sender_id_masking'].includes(subtype);
+
+    // Map apply_to + apply_entity_id → client_id / supplier_id
+    let clientId = null, supplierId = null;
+    if (applyEntityId && applyEntityId !== 'all') {
+      const eid = parseInt(applyEntityId, 10);
+      if (!isNaN(eid)) {
+        if (applyTo === 'client') clientId = eid;
+        else if (applyTo === 'supplier') supplierId = eid;
+      }
+    }
+
+    const serverType = subtype.startsWith('sender_id') ? 'sender_id'
+      : subtype.startsWith('destination') ? 'destination'
+      : subtype.startsWith('origination') ? 'origination'
+      : 'content';
+
+    const raw = req.file.buffer.toString('utf8').trim();
+    if (!raw) return res.status(400).json({ error: 'File is empty' });
+
+    if (poolMode) {
+      // Pool mode: each line is one value, combine into pipe-separated replacement
+      const lines = raw.split(/[\n\r]+/).map(s => s.trim()).filter(Boolean);
+      if (!lines.length) return res.status(400).json({ error: 'No valid lines found in file' });
+      const poolName = subtype === 'sender_id_masking' ? 'SID Pool Import' : 'Content Pool Import';
+      const poolPattern = subtype === 'sender_id_masking' ? '.*' : '.*';
+      const poolReplace = lines.join('|');
+
+      const r = await pool.query(
+        `INSERT INTO translations (translation_type, source_pattern, target_value, client_id, supplier_id,
+           name, description, subtype, priority, apply_to, apply_entity_id, is_active)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true) RETURNING *`,
+        [serverType, poolPattern, poolReplace, clientId, supplierId,
+         poolName, `${lines.length} values imported from ${req.file.originalname}`, subtype, 1, applyTo, applyEntityId]
+      );
+      return res.json({ success: true, mode: 'pool', created: 1, items: r.rows, values_count: lines.length, values: lines });
+    }
+
+    // CSV mode: parse header + rows
+    const lines = raw.split(/[\n\r]+/).filter(Boolean);
+    if (lines.length < 2) return res.status(400).json({ error: 'CSV needs at least a header row + one data row' });
+
+    // Auto-detect delimiter: tab, comma, semicolon, pipe
+    const header = lines[0];
+    let delim = ',';
+    const counts = { ',': (header.match(/,/g) || []).length, '\t': (header.match(/\t/g) || []).length, ';': (header.match(/;/g) || []).length, '|': (header.match(/\|/g) || []).length };
+    for (const [d, c] of Object.entries(counts)) { if (c > counts[delim]) delim = d; }
+
+    const headers = header.split(delim).map(h => h.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_'));
+    const created = [];
+    const errors = [];
+
+    for (let li = 1; li < lines.length; li++) {
+      const fields = lines[li].split(delim).map(f => f.trim());
+      if (fields.length < headers.length) continue;
+      const row = {};
+      headers.forEach((h, i) => { row[h] = fields[i] || ''; });
+
+      const rowName = row.name || row.translation_name || `Imported #${li}`;
+      const rowPattern = row.pattern || row.match_pattern || row.source_pattern || '';
+      const rowReplace = row.replacement || row.replace_pattern || row.target_value || '';
+      const rowType = row.type || row.subtype || subtype;
+      const rowDesc = row.description || row.desc || '';
+      const rowPriority = parseInt(row.priority || '1', 10) || 1;
+
+      if (!rowPattern || rowReplace == null) {
+        errors.push({ line: li + 1, error: 'Missing pattern or replacement' });
+        continue;
+      }
+
+      const rowServerType = rowType.startsWith('sender_id') ? 'sender_id'
+        : rowType.startsWith('destination') ? 'destination'
+        : rowType.startsWith('origination') ? 'origination'
+        : 'content';
+
+      try {
+        const ins = await pool.query(
+          `INSERT INTO translations (translation_type, source_pattern, target_value, client_id, supplier_id,
+             name, description, subtype, priority, apply_to, apply_entity_id, is_active)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true) RETURNING *`,
+          [rowServerType, rowPattern, rowReplace, clientId, supplierId,
+           rowName, rowDesc, rowType, rowPriority, applyTo, applyEntityId]
+        );
+        created.push(ins.rows[0]);
+      } catch (e) {
+        errors.push({ line: li + 1, error: e.message });
+      }
+    }
+
+    res.json({ success: true, mode: 'csv', created: created.length, errors: errors.length ? errors : undefined, items: created, delimiter: delim === '\t' ? 'tab' : delim });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1966,6 +2157,27 @@ app.get("/api/system/backups", async (_req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ===================== SYSTEM MIGRATIONS =====================
+// Manual trigger + audit history for idempotent schema migrations.
+const { bootstrapMigrationRunner } = require('./src/services/migrationRunner.cjs');
+
+app.post('/api/system/run-migrations', auth, roles('super_admin','admin'), async (req, res) => {
+  try {
+    const result = await bootstrapMigrationRunner(pool);
+    res.json({ success: result.ok, data: result });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+app.get('/api/system/migration-status', auth, roles('super_admin','admin'), async (req, res) => {
+  try {
+    const r = await pool.query('SELECT hash, label, applied_at FROM schema_migrations ORDER BY applied_at DESC');
+    res.json({ success: true, data: r.rows });
+  } catch (e) {
+    if (e.code === '42P01') return res.json({ success: true, data: [] });
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 console.log('[apiExtensions] loaded:', [
   'sms/validate','sms/dlr/batch',
   'rates/history','rates/deactivate-old','rates/notify','rates/destination','rates/update-destination',
@@ -1978,6 +2190,10 @@ console.log('[apiExtensions] loaded:', [
   'bind/:id/history',
   'api-connectors{CRUD}',
 ].length, 'endpoint groups');
+
+  // Export the shared translation engine so the SMS send pipeline in
+  // server.cjs can apply active translation rules before dispatch.
+  _factory.applyTranslations = applyTranslations;
 };
 module.exports = _factory;
 // Injector for server.cjs to wire asterisk-bridge + number-validation after

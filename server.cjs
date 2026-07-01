@@ -10,6 +10,9 @@ const cors = require('cors');
 const path = require('path');
 require('dotenv').config();
 const crypto = require('crypto');
+const { exec } = require('child_process');
+const { promisify } = require('util');
+const execPromise = promisify(exec);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -189,15 +192,21 @@ app.post('/internal/esme_bind_event', checkInternalToken, async (req, res) => {
     const negotiatedVersion = smppByteToVersion(interface_version);
     await pool.query(
       `INSERT INTO smpp_sessions
-         (entity_type, entity_id, system_id, ip_address, port, bind_mode, status, negotiated_version, connected_at, last_activity)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+         (entity_type, entity_id, system_id, ip_address, port, bind_mode, status, negotiated_version, connected_at, last_activity, last_error, last_error_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW(), $9, $10)
        ON CONFLICT (entity_type, entity_id) DO UPDATE
          SET status = EXCLUDED.status,
              last_activity = NOW(),
              negotiated_version = COALESCE(EXCLUDED.negotiated_version, smpp_sessions.negotiated_version),
              disconnected_at = CASE WHEN EXCLUDED.status IN ('unbound','error') THEN NOW() ELSE NULL END,
-             connected_at = CASE WHEN EXCLUDED.status = 'bound' THEN NOW() ELSE smpp_sessions.connected_at END`,
-      [finalType, finalId, system_id, remote_ip, bind_mode || 'transceiver', 2775, status || 'bound', negotiatedVersion]
+             connected_at = CASE WHEN EXCLUDED.status = 'bound' THEN NOW() ELSE smpp_sessions.connected_at END,
+             last_error = CASE WHEN EXCLUDED.status = '''' THEN NULL ELSE COALESCE(EXCLUDED.last_error, smpp_sessions.last_error) END,
+             last_error_at = CASE WHEN EXCLUDED.status = '''' THEN NULL ELSE COALESCE(EXCLUDED.last_error_at, smpp_sessions.last_error_at) END`,
+      [finalType, finalId, system_id, remote_ip, bind_mode || 'transceiver', 2775, status || 'bound', negotiatedVersion,
+       status === 'error' ? ('SMPP bind rejected' + (remote_ip ? ' from ' + remote_ip : '')) : null,
+       // Set timestamp only on errors. On bound, we clear both; on unbound, preserve
+       // the existing last_error so the 'Manually disconnected' or rejection message survives.
+       status === 'error' ? new Date().toISOString() : null]
     );
     // Mirror bind status back to suppliers table for inbound suppliers
     if (finalType === 'supplier') {
@@ -337,7 +346,7 @@ app.post('/api/auth/login', async (req, res) => {
 
 // ===================== CLIENTS =====================
 app.get('/api/clients', auth, async (req, res) => {
-  const r = await pool.query('SELECT * FROM clients ORDER BY created_at DESC');
+  const r = await pool.query('SELECT * FROM clients WHERE is_deleted = false ORDER BY created_at DESC');
   res.json({ success: true, data: r.rows });
 });
 app.post('/api/clients', auth, roles('super_admin','admin'), async (req, res) => {
@@ -353,13 +362,39 @@ app.put('/api/clients/:id', auth, roles('super_admin','admin'), async (req, res)
   res.json({ success: true });
 });
 app.delete('/api/clients/:id', auth, roles('super_admin'), async (req, res) => {
-  await pool.query('DELETE FROM clients WHERE id=$1', [req.params.id]);
+  const info = await pool.query('SELECT client_code, company_name FROM clients WHERE id = $1', [req.params.id]);
+  const code = info.rows[0]?.client_code || 'unknown';
+  const name = info.rows[0]?.company_name || 'unknown';
+  await pool.query('UPDATE clients SET is_deleted = true, status = $1, updated_at = NOW() WHERE id = $2', ['inactive', req.params.id]);
+  pool.query(
+    'INSERT INTO audit_logs (user_id, username, action, entity_type, entity_id, details, ip_address, user_agent) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+    [req.user.id, req.user.username, 'soft_delete', 'client', parseInt(req.params.id),
+     JSON.stringify({ client_code: code, company_name: name }),
+     req.ip || req.headers['x-forwarded-for'] || null,
+     req.headers['user-agent'] || null]
+  ).catch(e => console.warn('[audit] client delete log failed:', e.message));
   res.json({ success: true });
+});
+// Restore: un-delete a soft-deleted client
+app.post('/api/clients/:id/restore', auth, roles('super_admin'), async (req, res) => {
+  const info = await pool.query('SELECT client_code, company_name FROM clients WHERE id = $1', [req.params.id]);
+  const code = info.rows[0]?.client_code || 'unknown';
+  const name = info.rows[0]?.company_name || 'unknown';
+  const r = await pool.query('UPDATE clients SET is_deleted = false, status = $1, updated_at = NOW() WHERE id = $2 AND is_deleted = true RETURNING *', ['active', req.params.id]);
+  if (!r.rows.length) return res.status(404).json({ success: false, error: 'Client not found or not deleted' });
+  pool.query(
+    'INSERT INTO audit_logs (user_id, username, action, entity_type, entity_id, details, ip_address, user_agent) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+    [req.user.id, req.user.username, 'restore', 'client', parseInt(req.params.id),
+     JSON.stringify({ client_code: code, company_name: name }),
+     req.ip || req.headers['x-forwarded-for'] || null,
+     req.headers['user-agent'] || null]
+  ).catch(e => console.warn('[audit] client restore log failed:', e.message));
+  res.json({ success: true, data: r.rows[0] });
 });
 
 // ===================== SUPPLIERS =====================
 app.get('/api/suppliers', auth, async (req, res) => {
-  const r = await pool.query('SELECT * FROM suppliers ORDER BY created_at DESC');
+  const r = await pool.query('SELECT * FROM suppliers WHERE is_deleted = false ORDER BY created_at DESC');
   res.json({ success: true, data: r.rows });
 });
 app.post('/api/suppliers', auth, roles('super_admin','admin'), async (req, res) => {
@@ -374,13 +409,46 @@ app.put('/api/suppliers/:id', auth, roles('super_admin','admin'), async (req, re
   if (sets) await pool.query(`UPDATE suppliers SET ${sets}, updated_at=NOW() WHERE id=$${vals.length+1}`, [...vals, id]);
   res.json({ success: true });
 });
+// Soft-delete: marks supplier as deleted (hidden from GUI, preserved in DB for CDR)
+app.delete('/api/suppliers/:id', auth, roles('super_admin'), async (req, res) => {
+  const info = await pool.query('SELECT supplier_code, company_name FROM suppliers WHERE id = $1', [req.params.id]);
+  const code = info.rows[0]?.supplier_code || 'unknown';
+  const name = info.rows[0]?.company_name || 'unknown';
+  await pool.query('UPDATE suppliers SET is_deleted = true, status = $1, updated_at = NOW() WHERE id = $2', ['inactive', req.params.id]);
+  pool.query(
+    'INSERT INTO audit_logs (user_id, username, action, entity_type, entity_id, details, ip_address, user_agent) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+    [req.user.id, req.user.username, 'soft_delete', 'supplier', parseInt(req.params.id),
+     JSON.stringify({ supplier_code: code, company_name: name }),
+     req.ip || req.headers['x-forwarded-for'] || null,
+     req.headers['user-agent'] || null]
+  ).catch(e => console.warn('[audit] supplier delete log failed:', e.message));
+  res.json({ success: true });
+});
+// Restore: un-delete a soft-deleted supplier
+app.post('/api/suppliers/:id/restore', auth, roles('super_admin'), async (req, res) => {
+  const info = await pool.query('SELECT supplier_code, company_name FROM suppliers WHERE id = $1', [req.params.id]);
+  const code = info.rows[0]?.supplier_code || 'unknown';
+  const name = info.rows[0]?.company_name || 'unknown';
+  const r = await pool.query('UPDATE suppliers SET is_deleted = false, status = $1, updated_at = NOW() WHERE id = $2 AND is_deleted = true RETURNING *', ['active', req.params.id]);
+  if (!r.rows.length) return res.status(404).json({ success: false, error: 'Supplier not found or not deleted' });
+  pool.query(
+    'INSERT INTO audit_logs (user_id, username, action, entity_type, entity_id, details, ip_address, user_agent) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+    [req.user.id, req.user.username, 'restore', 'supplier', parseInt(req.params.id),
+     JSON.stringify({ supplier_code: code, company_name: name }),
+     req.ip || req.headers['x-forwarded-for'] || null,
+     req.headers['user-agent'] || null]
+  ).catch(e => console.warn('[audit] supplier restore log failed:', e.message));
+  res.json({ success: true, data: r.rows[0] });
+});
 
 // ===================== BIND STATUS =====================
 // Get all bind statuses with session details from DB
 app.get('/api/bind/status', auth, async (req, res) => {
   const r = await pool.query(`SELECT s.id, s.supplier_code, s.company_name, s.connection_type, s.bind_status, s.consecutive_failures, s.status,
-    COALESCE(ss.status, 'unbound') as session_status, ss.connected_at, ss.last_activity, ss.system_id
+    COALESCE(ss.status, 'unbound') as session_status, ss.connected_at, ss.last_activity, ss.system_id,
+    ss.negotiated_version, ss.ip_address, ss.bind_mode, ss.last_error, ss.last_error_at
     FROM suppliers s LEFT JOIN smpp_sessions ss ON ss.entity_id = s.id AND ss.entity_type = 'supplier'
+    WHERE s.is_deleted = false
     ORDER BY s.id`);
   res.json({ success: true, data: r.rows });
 });
@@ -409,6 +477,11 @@ app.post('/api/bind/:id/connect', auth, roles('super_admin','admin','support'), 
     const result = await performSupplierBind(s);
 
     if (result.ok) {
+      // Clear last_error on successful bind (same as reconnect endpoint)
+      pool.query(
+        "UPDATE smpp_sessions SET last_error = NULL, last_error_at = NULL WHERE entity_type = 'supplier' AND entity_id = $1",
+        [req.params.id]
+      ).catch(() => {});
       return res.json({
         success: true,
         message: 'Bind successful',
@@ -419,13 +492,25 @@ app.post('/api/bind/:id/connect', auth, roles('super_admin','admin','support'), 
       });
     }
 
+    // Record the rejection reason so Bind Status shows why the supplier is in error
+    const rejectReason = result.gatewayDown ? 'Java SMPP gateway unreachable' : 'Supplier rejected all attempted SMPP versions';
+    pool.query(
+      "UPDATE smpp_sessions SET last_error = $1, last_error_at = NOW() WHERE entity_type = 'supplier' AND entity_id = $2",
+      [rejectReason, req.params.id]
+    ).catch(() => {});
     return res.json({
       success: false,
-      message: result.gatewayDown ? 'Java SMPP gateway unreachable' : 'Bind failed — supplier rejected all attempted SMPP versions',
+      message: rejectReason,
       bind_status: 'error',
       requested_version: s.smpp_version || 'auto',
     });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    pool.query(
+      "UPDATE smpp_sessions SET last_error = $1, last_error_at = NOW() WHERE entity_type = 'supplier' AND entity_id = $2",
+      ['Bind error: ' + (e.message || 'unknown'), req.params.id]
+    ).catch(() => {});
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Disconnect/unbind SMPP — delegates to shared performSupplierUnbind
@@ -433,6 +518,10 @@ app.post('/api/bind/:id/disconnect', auth, roles('super_admin','admin','support'
   try {
     const supplierId = parseInt(req.params.id, 10);
     await performSupplierUnbind(supplierId);
+    await pool.query(
+      "UPDATE smpp_sessions SET last_error = 'Manually disconnected', last_error_at = NOW() WHERE entity_type = 'supplier' AND entity_id = $1",
+      [supplierId]
+    );
     res.json({ success: true, message: 'Disconnected', bind_status: 'unbound' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -449,15 +538,33 @@ app.post('/api/bind/:id/reconnect', auth, roles('super_admin','admin','support')
     const result = await performSupplierBind(s, { incrementBoundCount: true, resetFailures: true });
 
     if (result.ok) {
+      // Clear last_error on successful reconnect
+      pool.query(
+        "UPDATE smpp_sessions SET last_error = NULL, last_error_at = NULL WHERE entity_type = 'supplier' AND entity_id = $1",
+        [req.params.id]
+      ).catch(() => {});
       return res.json({ success: true, message: 'Reconnected', bind_status: 'bound', negotiated_version: result.negotiatedVersion });
     }
 
+    // Record the rejection reason
+    const rejectReason = result.gatewayDown ? 'Java SMPP gateway unreachable' : 'Supplier rejected bind';
+    pool.query(
+      "UPDATE smpp_sessions SET last_error = $1, last_error_at = NOW() WHERE entity_type = 'supplier' AND entity_id = $2",
+      [rejectReason, req.params.id]
+    ).catch(() => {});
     return res.json({
       success: false,
-      message: result.gatewayDown ? 'Java SMPP gateway unreachable' : 'Reconnect failed — supplier rejected bind',
+      message: rejectReason,
       bind_status: 'error',
     });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    // Persist the reconnect error on smpp_sessions for the Bind Status page
+    pool.query(
+      "UPDATE smpp_sessions SET last_error = $1, last_error_at = NOW() WHERE entity_type = 'supplier' AND entity_id = $2",
+      ['Reconnect error: ' + (e.message || 'unknown'), req.params.id]
+    ).catch(() => {});
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Test SMPP connection — performs a real auto-negotiation bind test via the
@@ -530,7 +637,7 @@ app.get('/api/smpp_sessions', auth, async (req, res) => {
 // ===================== SMS (with DLR + profit check + billing) =====================
 app.post('/api/sms/send', auth, async (req, res) => {
   try {
-    const { client_id, destination, sender_id, message, route_plan_id } = req.body;
+    let { client_id, destination, sender_id, message, route_plan_id } = req.body;
     // 1. Auth
     const client = await pool.query('SELECT * FROM clients WHERE id=$1 AND status=$2', [client_id, 'active']);
     if (!client.rows.length) return res.status(400).json({ error: 'Client not found' });
@@ -593,6 +700,24 @@ app.post('/api/sms/send', auth, async (req, res) => {
         routeId = fb.rows[0].route_id;
         routeName = fb.rows[0].route_name;
       }
+    }
+    // 4.5. Apply active translations — rewrite sender_id, destination, and message
+    //      based on scoped rules (global, per-client, per-supplier, per-route).
+    //      Runs AFTER routing so entityFilter can match on supplier_id + route_id.
+    if (applyTranslations) {
+      const translated = await applyTranslations(pool, {
+        client_id,
+        supplier_id: supplier?.id || null,
+        route_id: routeId || null,
+        sender_id: sender_id || '',
+        destination: destination || '',
+        message: message || '',
+      });
+      sender_id = translated.sender_id;
+      destination = translated.destination;
+      message = translated.message;
+    } else {
+      console.warn('[sms/send] applyTranslations not available — translation engine skipped. Check apiExtensions init order.');
     }
     // 5. Find rate (client sell rate) — prefer the routed supplier, else generic.
     let clientRate = 0.025, supplierRate = 0.015;
@@ -836,6 +961,69 @@ app.post('/api/rates/bulk', auth, roles('super_admin','admin','billing'), async 
   } catch (e) { await client.query('ROLLBACK'); res.status(500).json({ error: e.message }); }
   finally { client.release(); }
 });
+
+// Column whitelist for PUT /api/rates/:id
+const RATE_COLUMNS = new Set([
+  'entity_type', 'entity_id', 'mcc', 'mnc', 'country', 'operator',
+  'rate', 'currency', 'effective_from', 'effective_to', 'is_active'
+]);
+
+// PUT /api/rates/:id — smart versioning:
+// - is_active toggle → in-place UPDATE (no new version)
+// - rate value change → deactivate old + INSERT new version (audit trail)
+app.put('/api/rates/:id', auth, roles('super_admin','admin','billing'), async (req, res) => {
+  try {
+    const id = req.params.id;
+    const existing = await pool.query('SELECT * FROM rates WHERE id = $1', [id]);
+    if (!existing.rows.length) return res.status(404).json({ success: false, error: 'Rate not found' });
+    const old = existing.rows[0];
+
+    const clean = {};
+    for (const [k, v] of Object.entries(req.body)) {
+      if (!RATE_COLUMNS.has(k)) continue;
+      clean[k] = (v === '' || v === undefined) ? null : v;
+    }
+    const keys = Object.keys(clean);
+    if (!keys.length) return res.status(400).json({ success: false, error: 'No valid fields to update' });
+
+    const rateChanged = 'rate' in clean && clean.rate !== null && clean.rate !== undefined
+                     && parseFloat(clean.rate) !== parseFloat(old.rate);
+    if (rateChanged) {
+      const merged = { ...old, ...clean };
+      const isActive = 'is_active' in clean ? clean.is_active : true;
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('UPDATE rates SET is_active = false, effective_to = CURRENT_DATE WHERE id = $1', [id]);
+        const r = await client.query(
+          `INSERT INTO rates (entity_type, entity_id, mcc, mnc, country, operator, rate, effective_from, version, is_active)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+             (SELECT COALESCE(MAX(version),0) + 1 FROM rates WHERE entity_type = $1 AND entity_id = $2 AND mcc = $3 AND mnc = $4),
+             $9)
+           RETURNING *`,
+          [merged.entity_type, merged.entity_id, merged.mcc, merged.mnc,
+           merged.country, merged.operator || 'All', merged.rate,
+           clean.effective_from || new Date().toISOString().split('T')[0],
+           isActive]
+        );
+        await client.query('COMMIT');
+        return res.json({ success: true, data: r.rows[0], versioned: true });
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally { client.release(); }
+    }
+
+    const sets = keys.map((k, i) => `${k}=$${i+1}`).join(',');
+    const vals = keys.map(k => clean[k]);
+    const r = await pool.query(
+      `UPDATE rates SET ${sets} WHERE id = $${vals.length + 1} RETURNING *`,
+      [...vals, id]
+    );
+    res.json({ success: true, data: r.rows[0], versioned: false });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 
 // ===================== INVOICES =====================
 app.get('/api/billing/invoices', auth, async (req, res) => {
@@ -1232,6 +1420,7 @@ require("./users-api.cjs")(app, pool, auth, roles);
 // Express match against the otherwise-generic handlers.
 const apiExtensionsFactory = require("./apiExtensions.cjs");
 apiExtensionsFactory(app, pool, auth, roles);
+const applyTranslations = apiExtensionsFactory.applyTranslations;
 // Wire asterisk-bridge + number-validation-providers into apiExtensions'
 // /api/asterisk/* and /api/number/* endpoints. setModules is exported on
 // the same module.exports value so call order is: require, factory call,
@@ -1305,10 +1494,36 @@ async function voiceDlrPollerOnce() {
         // so a fast DialEnd can't slip through an empty pending map on the
         // chosen server.
         const waitPromise = astBridge.awaitCallStatus(chosen.id, row.call_id, 60000);
+        // Audio concatenation: look up voice_otp_configs by language, build
+        // a &-separated file list for Asterisk's Playback() so the caller
+        // hears greeting + digit audio instead of TTS. Falls back to TTS
+        // when no audio files are configured for this language.
+        let audioFiles = '';
+        try {
+          const cfg = await pool.query(
+            'SELECT * FROM voice_otp_configs WHERE language_code = $1 AND is_active = true LIMIT 1',
+            [row.language]
+          );
+          if (cfg.rows.length) {
+            const c = cfg.rows[0];
+            const isRetry = (row.retry_count || 0) > 0;
+            const greetingUrl = isRetry ? c.secondary_greeting_audio_url : c.greeting_audio_url;
+            const digitFiles = isRetry ? (c.secondary_audio_files || {}) : (c.audio_files || {});
+            // Strip URL prefix + file extension so Asterisk finds them in its sounds dir
+            const toSoundPath = (url) => String(url || '').replace(/^\/uploads\/audio\//, '').replace(/\.\w+$/, '');
+            const parts = [];
+            if (greetingUrl) parts.push(toSoundPath(greetingUrl));
+            for (const d of String(row.otp_code || '').split('')) {
+              if (digitFiles[d]) parts.push(toSoundPath(digitFiles[d]));
+            }
+            audioFiles = parts.filter(Boolean).join('&');
+          }
+        } catch (_) { /* non-fatal: fall back to TTS */ }
         const out = await astBridge.originate(chosen.id, {
           call_id: row.call_id, destination: row.destination,
           language: row.language, otp_code: row.otp_code,
           caller_id: null,
+          audio_files: audioFiles,
         });
         // Persist server attribution immediately (audit trail even if the
         // call ultimately times out).
@@ -1348,12 +1563,12 @@ async function voiceDlrPollerOnce() {
         } else {
           // Failed this attempt — bump retry_count, schedule next attempt per policy.
           const newRc = (row.retry_count || 0) + 1;
-          if (newRc > (row.max_retries || 3)) {
+          if (newRc > (row.max_retries || 1)) {
             await pool.query(`UPDATE voice_call_retry_queue SET status='failed', completed_at=NOW() WHERE id=$1`, [row.id]);
             await pool.query(`UPDATE voice_otp_logs SET dial_status='FAILED', status='failed', completed_at=NOW() WHERE call_id=$1`, [row.call_id]);
             await pushSyntheticVoiceDlr(row.call_id, 'FAILED', row.destination, row.otp_code, row.language, row.client_id);
           } else {
-            const waitSec = ({ 2: 70, 3: 105 })[newRc] || 0;
+            const waitSec = ({ 1: 60, 2: 70, 3: 105 })[newRc] || 0;
             const nextSql = waitSec ? `CURRENT_TIMESTAMP + INTERVAL '${waitSec} seconds'` : 'CURRENT_TIMESTAMP';
             await pool.query(
               `UPDATE voice_call_retry_queue SET status='waiting', retry_count=$1, next_attempt_at=${nextSql} WHERE id=$2`,
@@ -1517,6 +1732,39 @@ function startForceDlrScheduler() {
   }, 60000);
   console.log('[force-dlr] scheduler started (client:10s, supplier:60s tick)');
 }
+
+// ============================================================
+// CDR AUTO-CLEANUP — deletes sms_logs older than 6 months when
+// disk usage exceeds 80%. Runs every hour. Preserves CDR for
+// active clients/suppliers; soft-delete ensures CDR isn't lost
+// when a client/supplier is removed from the GUI.
+// ============================================================
+let _cdrCleanupHandle = null;
+async function cdrCleanupOnce() {
+  try {
+    // Check disk usage percentage on the root filesystem
+    const { stdout } = await execPromise("df -h / | tail -1 | awk '{print $5}'", { timeout: 5000 });
+    const pctUsed = parseInt((stdout || '').trim().replace('%', ''), 10);
+    if (isNaN(pctUsed) || pctUsed < 80) return; // below threshold — nothing to do
+
+    console.log(`[cdr-cleanup] disk at ${pctUsed}% — deleting sms_logs older than 6 months`);
+    const result = await pool.query(
+      `DELETE FROM sms_logs WHERE submit_time < NOW() - INTERVAL '6 months'`
+    );
+    if (result.rowCount > 0) {
+      console.log(`[cdr-cleanup] deleted ${result.rowCount} old CDR rows (older than 6 months)`);
+    }
+  } catch (e) {
+    console.warn('[cdr-cleanup] tick failed:', e.message);
+  }
+}
+function startCdrCleanup() {
+  if (_cdrCleanupHandle) return;
+  // Run once on startup, then every hour
+  cdrCleanupOnce().catch(() => {});
+  _cdrCleanupHandle = setInterval(cdrCleanupOnce, 3600000);
+  console.log('[cdr-cleanup] started (1h tick, deletes CDR > 6 months old when disk > 80%)');
+}
 // ===================== SMTP TEST =====================
 app.post('/api/smtp/test', auth, roles('super_admin','admin'), async (req, res) => {
   try {
@@ -1527,7 +1775,7 @@ app.post('/api/smtp/test', auth, roles('super_admin','admin'), async (req, res) 
 
 // ===================== DASHBOARD =====================
 app.get('/api/dashboard/stats', auth, async (req, res) => {
-  const r = await pool.query(`SELECT (SELECT COUNT(*) FROM clients) as tc, (SELECT COUNT(*) FROM clients WHERE status='active') as ac, (SELECT COUNT(*) FROM suppliers) as ts, (SELECT COUNT(*) FROM suppliers WHERE status='active') as asu, (SELECT COUNT(*) FROM sms_logs WHERE submit_time::date=CURRENT_DATE) as sms_t, (SELECT COUNT(*) FROM sms_logs WHERE submit_time::date=CURRENT_DATE AND status='delivered') as del_t, (SELECT COUNT(*) FROM suppliers WHERE bind_status='bound') as ab, (SELECT COUNT(*) FROM suppliers) as tb`);
+  const r = await pool.query(`SELECT (SELECT COUNT(*) FROM clients WHERE is_deleted = false) as tc, (SELECT COUNT(*) FROM clients WHERE status='active' AND is_deleted = false) as ac, (SELECT COUNT(*) FROM suppliers WHERE is_deleted = false) as ts, (SELECT COUNT(*) FROM suppliers WHERE status='active' AND is_deleted = false) as asu, (SELECT COUNT(*) FROM sms_logs WHERE submit_time::date=CURRENT_DATE) as sms_t, (SELECT COUNT(*) FROM sms_logs WHERE submit_time::date=CURRENT_DATE AND status='delivered') as del_t, (SELECT COUNT(*) FROM suppliers WHERE bind_status='bound' AND is_deleted = false) as ab, (SELECT COUNT(*) FROM suppliers WHERE is_deleted = false) as tb`);
   res.json({ success: true, data: r.rows[0] });
 });
 
@@ -1890,9 +2138,34 @@ app.delete('/api/residential_proxies/:id', auth, async (req, res) => {
 });
 
 // ===================== ALL OTHER CRUD (Generic) =====================
+const SAFE_IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+const TABLE_COLUMNS = {
+  mccmnc: new Set(['country','country_code','mcc','mnc','operator','network_type','status']),
+  trunks: new Set(['trunk_name','trunk_type','supplier_id','priority','percentage','is_active','mccmnc_allowed']),
+  routes: new Set(['route_name','trunk_ids','route_method','is_active']),
+  route_plans: new Set(['plan_name','route_ids','is_default']),
+  route_maps: new Set(['client_id','route_id','supplier_id','mccmnc_pattern','priority','percentage','is_active']),
+  payments: new Set(['entity_type','entity_id','entity_name','amount','currency','payment_method','reference','status','notes']),
+  campaigns: new Set(['campaign_name','client_id','sender_id','message_template','recipients_count','sent_count','delivered_count','failed_count','status','scheduled_at','started_at','completed_at']),
+  translations: new Set(['translation_type','source_pattern','target_value','client_id','supplier_id','route_id','name','description','subtype','priority','apply_to','apply_entity_id','is_active']),
+  notifications: new Set(['title','message','type','entity_type','entity_name','entity_id','recipient_email','recipient_role','is_read','is_emailed']),
+  notification_templates: new Set(['template_name','subject','body','variables','is_active']),
+  ott_devices: new Set(['device_name','device_type','phone_number','session_status','qr_code','last_active','supplier_id']),
+  api_connectors: new Set(['name','provider','connector_type','region','auth_type','http_method','api_key','api_secret','send_url','dlr_url','dlr_webhook_secret','dlr_status_mapping','submit_pattern','dlr_pattern','dlr_value','test_payload','params','is_active','connection_status']),
+  social_api_suppliers: new Set(['name','platform','phone_number_id','access_token','bot_token','webhook_verify_token','proxy_enabled','proxy_host','proxy_port','proxy_username','proxy_password','is_active','connection_status']),
+  voice_otp_configs: new Set(['language','language_code','greeting_text','retry_text','audio_0_9','sip_host','sip_port','sip_username','sip_password','caller_id','is_active']),
+  voice_otp_logs: new Set(['call_id','destination','otp_code','language','duration','retry_count','max_retries','status','dlr_status','error_message','sip_call_id','completed_at']),
+  license: new Set(['license_key','license_type','status','issued_to','system_ip','system_mac','issued_date','expiry_date','features','limits']),
+  tenants: new Set(['name','code','status','features','limits','sms_this_month','tps_current']),
+  platform_settings: new Set(['key','value']),
+  smtp_config: new Set(['host','port','encryption','username','password','from_email','from_name','is_active']),
+  audit_logs: new Set(['user_id','username','action','entity_type','entity_id','details','ip_address','user_agent']),
+};
+
 const tables = ['mccmnc','trunks','routes','route_plans','route_maps','payments','campaigns','translations','notifications','notification_templates','ott_devices','api_connectors','social_api_suppliers','voice_otp_configs','voice_otp_logs','license','tenants','platform_settings','smtp_config','audit_logs'];
 
 tables.forEach(table => {
+  const allowedColumns = TABLE_COLUMNS[table] || null;
   app.get(`/api/${table}`, auth, async (req, res) => {
     try {
       const r = await pool.query(`SELECT * FROM ${table} ORDER BY id DESC LIMIT 500`);
@@ -1904,9 +2177,11 @@ tables.forEach(table => {
       // Convert empty strings to null so INTEGER/FK columns don't choke
       const clean = {};
       for (const [k, v] of Object.entries(req.body)) {
+        if (allowedColumns ? !allowedColumns.has(k) : !SAFE_IDENTIFIER.test(k)) continue;
         clean[k] = (v === '' || v === undefined) ? null : v;
       }
       const keys = Object.keys(clean);
+      if (!keys.length) return res.status(400).json({ success: false, error: 'No valid fields to insert' });
       const vals = keys.map(k => clean[k]);
       const ph = keys.map((_, i) => '$' + (i + 1)).join(',');
       const r = await pool.query(`INSERT INTO ${table} (${keys.join(',')}) VALUES (${ph}) RETURNING *`, vals);
@@ -1918,12 +2193,14 @@ tables.forEach(table => {
       // Convert empty strings to null so INTEGER/FK columns don't choke
       const clean = {};
       for (const [k, v] of Object.entries(req.body)) {
+        if (allowedColumns ? !allowedColumns.has(k) : !SAFE_IDENTIFIER.test(k)) continue;
         clean[k] = (v === '' || v === undefined) ? null : v;
       }
       const keys = Object.keys(clean);
+      if (!keys.length) return res.status(400).json({ success: false, error: 'No valid fields to update' });
       const sets = keys.map((k, i) => `${k}=$${i+1}`).join(',');
       const vals = keys.map(k => clean[k]);
-      if (keys.length > 0) await pool.query(`UPDATE ${table} SET ${sets} WHERE id=$${keys.length+1}`, [...vals, req.params.id]);
+      await pool.query(`UPDATE ${table} SET ${sets} WHERE id=$${keys.length+1}`, [...vals, req.params.id]);
       res.json({ success: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
@@ -2023,6 +2300,7 @@ app.get(/^(?!\/(api|internal|uploads)\/).*/, (req, res) => {
   } catch (e) { console.warn('[migrations] mo_sms table creation failed (non-fatal):', e.message); }
   startVoiceDlrPoller();
   startForceDlrScheduler();
+  startCdrCleanup();
   app.listen(PORT, () => {
     console.log(`NET2APP Hub running on port ${PORT}`);
     console.log(`Database: ${pool.options.database} on ${pool.options.host}`);

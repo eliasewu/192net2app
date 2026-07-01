@@ -42,6 +42,7 @@ export const SMSLogs: React.FC = () => {
   const { smsLogs, clients, reloadSMSLogs } = useData();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [dlrStatusFilter, setDlrStatusFilter] = useState<string>('all');
   const [clientFilter, setClientFilter] = useState<string>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [detailModal, setDetailModal] = useState<SMSLog | null>(null);
@@ -94,8 +95,15 @@ export const SMSLogs: React.FC = () => {
       (log.destination || '').includes(search) ||
       (log.sender_id || '').toLowerCase().includes(search.toLowerCase());
     const matchesStatus = statusFilter === 'all' || log.status === statusFilter;
+    const matchesDlrStatus = dlrStatusFilter === 'all' ||
+      (log.dlr_status || '') === dlrStatusFilter ||
+      // Infer DLR status from sms_logs.status for rows that predate explicit dlr_status
+      (dlrStatusFilter === 'DELIVRD' && log.status === 'delivered' && !log.dlr_status) ||
+      (dlrStatusFilter === 'UNDELIV' && log.status === 'failed' && !log.dlr_status) ||
+      (dlrStatusFilter === 'EXPIRED' && log.status === 'expired' && !log.dlr_status) ||
+      (dlrStatusFilter === 'REJECTD' && log.status === 'rejected' && !log.dlr_status);
     const matchesClient = clientFilter === 'all' || String(log.client_id) === clientFilter;
-    return matchesSearch && matchesStatus && matchesClient;
+    return matchesSearch && matchesStatus && matchesDlrStatus && matchesClient;
   });
 
   const totalPages = Math.ceil(filteredLogs.length / itemsPerPage);
@@ -333,6 +341,17 @@ export const SMSLogs: React.FC = () => {
               <option value="pending">Pending</option>
               <option value="failed">Failed</option>
               <option value="rejected">Rejected</option>
+            </select>
+            <select
+              value={dlrStatusFilter}
+              onChange={(e) => setDlrStatusFilter(e.target.value)}
+              className="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="all">All DLR</option>
+              <option value="DELIVRD">DELIVRD</option>
+              <option value="UNDELIV">UNDELIV</option>
+              <option value="EXPIRED">EXPIRED</option>
+              <option value="REJECTD">REJECTD</option>
             </select>
             <Button variant="secondary" icon={<Filter size={16} />}>More Filters</Button>
           </div>

@@ -85,6 +85,15 @@ module.exports = {
     return await postJson('/unbind_supplier', { supplier_id });
   },
 
+  // Force-disconnect an ESME client or inbound-supplier session by
+  // smpp_session_id. Calls Java's POST /api/esme/disconnect/:id which
+  // removes the session, closes the TCP socket, and fires a bind_event
+  // (unbound) back to Node so smpp_sessions + suppliers tables stay in sync.
+  // Returns null on gateway-unreachable; NEVER throws.
+  async disconnectEsme(smppSessionId) {
+    return await postJson(`/api/esme/disconnect/${encodeURIComponent(smppSessionId)}`, {});
+  },
+
   // Forward an SMS through the SMSC
   // payload: {supplier_id, client_id, client_code, supplier_code, sender_id, destination, message, message_id}
   async submitSm(payload) {

@@ -20,8 +20,8 @@ interface DataContextType {
   residentialProxies: ResidentialProxy[];
   dashboardStats: DashboardStats; hourlyTraffic: Array<{ hour: string; count: number }>; dailyRevenue: Array<{ date: string; amount: number }>; topDest: Array<{ destination: string; count: number; revenue: number }>;
   // CRUD operations (async - go through API)
-  addClient:(c:Omit<Client,'id'|'created_at'|'updated_at'>)=>Promise<void>; updateClient:(id:string,c:Partial<Client>)=>Promise<void>; deleteClient:(id:string)=>Promise<void>;
-  addSupplier:(s:Omit<Supplier,'id'|'created_at'|'updated_at'>)=>Promise<void>; updateSupplier:(id:string,s:Partial<Supplier>)=>Promise<void>; deleteSupplier:(id:string)=>Promise<void>;
+  addClient:(c:Omit<Client,'id'|'created_at'|'updated_at'>)=>Promise<void>; updateClient:(id:string,c:Partial<Client>)=>Promise<void>; deleteClient:(id:string)=>Promise<void>; restoreClient:(id:string)=>Promise<any>;
+  addSupplier:(s:Omit<Supplier,'id'|'created_at'|'updated_at'>)=>Promise<void>; updateSupplier:(id:string,s:Partial<Supplier>)=>Promise<void>; deleteSupplier:(id:string)=>Promise<void>; restoreSupplier:(id:string)=>Promise<any>;
   addSMSLog:(log:Omit<SMSLog,'id'|'created_at'|'submit_time'>)=>Promise<void>;
   addTrunk:(t:Omit<Trunk,'id'|'created_at'>)=>Promise<void>; updateTrunk:(id:string,t:Partial<Trunk>)=>Promise<void>; deleteTrunk:(id:string)=>Promise<void>;
   addRoute:(r:Omit<Route,'id'|'created_at'>)=>Promise<void>; updateRoute:(id:string,r:Partial<Route>)=>Promise<void>; deleteRoute:(id:string)=>Promise<void>;
@@ -35,6 +35,7 @@ interface DataContextType {
   markNotificationRead:(id:string)=>void;
   addCampaign:(c:Omit<Campaign,'id'|'created_at'>)=>Promise<void>; updateCampaign:(id:string,c:Partial<Campaign>)=>Promise<void>; deleteCampaign:(id:string)=>Promise<void>;
   addTranslation:(t:Omit<Translation,'id'|'created_at'>)=>Promise<void>; updateTranslation:(id:string,t:Partial<Translation>)=>Promise<void>; deleteTranslation:(id:string)=>Promise<void>;
+  reloadTranslations: ()=>Promise<void>;
   addSocialAPISupplier:(s:Omit<SocialAPISupplier,'id'|'created_at'|'updated_at'>)=>Promise<void>; updateSocialAPISupplier:(id:string,s:Partial<SocialAPISupplier>)=>Promise<void>; deleteSocialAPISupplier:(id:string)=>Promise<void>;
   reloadResidentialProxies: ()=>Promise<void>;
   getClientById:(id:string)=>Client|undefined; getSupplierById:(id:string)=>Supplier|undefined; getTrunkById:(id:string)=>Trunk|undefined;
@@ -326,6 +327,13 @@ export const DataProvider:React.FC<{children:ReactNode}> = ({children}) => {
       await reloadClients();
     } catch (e: any) { console.error('deleteClient failed:', e); throw e; }
   }, [reloadClients]);
+  const restoreClient = useCallback(async (id: string) => {
+    try {
+      const res = await apiPost(`/clients/${id}/restore`, {});
+      if (res?.success) await reloadClients();
+      return res;
+    } catch (e: any) { console.error('restoreClient failed:', e); throw e; }
+  }, [reloadClients]);
 
   // ==================== SUPPLIER CRUD ====================
   const addSupplier = useCallback(async (s: Omit<Supplier,'id'|'created_at'|'updated_at'>) => {
@@ -345,6 +353,13 @@ export const DataProvider:React.FC<{children:ReactNode}> = ({children}) => {
       await apiDelete(`/suppliers/${id}`);
       await reloadSuppliers();
     } catch (e: any) { console.error('deleteSupplier failed:', e); throw e; }
+  }, [reloadSuppliers]);
+  const restoreSupplier = useCallback(async (id: string) => {
+    try {
+      const res = await apiPost(`/suppliers/${id}/restore`, {});
+      if (res?.success) await reloadSuppliers();
+      return res;
+    } catch (e: any) { console.error('restoreSupplier failed:', e); throw e; }
   }, [reloadSuppliers]);
 
   // ==================== SMS LOGS ====================
@@ -572,6 +587,8 @@ export const DataProvider:React.FC<{children:ReactNode}> = ({children}) => {
     } catch (e: any) { console.error('deleteTranslation failed:', e); throw e; }
   }, []);
 
+  const reloadTranslations = useCallback(async () => { const data = await fetchList('/translations'); setTranslations(data); }, []);
+
   // ==================== SOCIAL API SUPPLIERS ====================
   const addSocialAPISupplier = useCallback(async (s: Omit<SocialAPISupplier,'id'|'created_at'|'updated_at'>) => {
     try {
@@ -639,8 +656,8 @@ export const DataProvider:React.FC<{children:ReactNode}> = ({children}) => {
       ottDevices, apiConnectors, users, socialApiSuppliers, residentialProxies,
       emailTemplates, notifications, campaigns, translations, voiceOTPConfigs,
       dashboardStats, hourlyTraffic: [], dailyRevenue: [], topDest: [],
-      addClient, updateClient, deleteClient,
-      addSupplier, updateSupplier, deleteSupplier,
+      addClient, updateClient, deleteClient, restoreClient,
+      addSupplier, updateSupplier, deleteSupplier, restoreSupplier,
       addSMSLog, addTrunk, updateTrunk, deleteTrunk,
       addRoute, updateRoute, deleteRoute,
       addRoutePlan, updateRoutePlan, deleteRoutePlan,
@@ -652,7 +669,7 @@ export const DataProvider:React.FC<{children:ReactNode}> = ({children}) => {
       addSocialAPISupplier, updateSocialAPISupplier, deleteSocialAPISupplier,
       markNotificationRead,
       addCampaign, updateCampaign, deleteCampaign,
-      addTranslation, updateTranslation, deleteTranslation,
+      addTranslation, updateTranslation, deleteTranslation, reloadTranslations,
       getClientById, getSupplierById, getTrunkById,
       updateEmailTemplate,
       platformSettings, updatePlatformSetting,

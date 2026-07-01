@@ -1,5 +1,5 @@
-import React from 'react';
-import { Users, MessageSquare, Radio, CheckCircle, XCircle, AlertTriangle, Bell, WifiOff, FileText, Download } from 'lucide-react';
+import React, { useState } from 'react';
+import { Users, MessageSquare, Radio, CheckCircle, XCircle, AlertTriangle, Bell, WifiOff, FileText, Download, Database } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
 import { useData } from '../store/DataContext';
 import { Card } from '../components/UI/Card';
@@ -7,9 +7,13 @@ import { Button } from '../components/UI/Button';
 import { StatCard } from '../components/UI/StatCard';
 import { Badge } from '../components/UI/Badge';
 import { exportCSV, exportExcel } from '../services/exportService';
+import { api } from '../services/api';
+import { useToast } from '../components/UI/Toast';
 
 export const Dashboard: React.FC = () => {
   const { clients, suppliers, smsLogs, invoices, payments } = useData();
+  const { addToast } = useToast();
+  const [migrating, setMigrating] = useState(false);
 
   // Real alert computation from data
   const consecutiveFails = (() => {
@@ -86,6 +90,38 @@ export const Dashboard: React.FC = () => {
       <div className="flex items-center justify-between">
         <div><h1 className="text-2xl font-bold text-gray-800">Dashboard</h1><p className="text-gray-500 mt-1">Real-time platform overview from database</p></div>
         <div className="flex items-center gap-3">
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<Database size={14} />}
+            loading={migrating}
+            onClick={async () => {
+              if (migrating) return;
+              setMigrating(true);
+              try {
+                const res = await api.post('/system/run-migrations');
+                if (res?.success && res?.data) {
+                  const d = res.data;
+                  const parts = [];
+                  if (d.executed > 0) parts.push(`${d.executed} executed`);
+                  if (d.alreadyApplied > 0) parts.push(`${d.alreadyApplied} already applied`);
+                  if (d.skipped > 0) parts.push(`${d.skipped} skipped`);
+                  const msg = parts.length > 0
+                    ? `Migrations: ${parts.join(', ')} (${d.total} total)`
+                    : `Migrations complete — ${d.total} statements (all already applied)`;
+                  addToast('success', msg);
+                } else {
+                  addToast('error', res?.data?.error || 'Migration run failed');
+                }
+              } catch (e: any) {
+                addToast('error', `Migration error: ${e?.message || 'unknown'}`);
+              } finally {
+                setMigrating(false);
+              }
+            }}
+          >
+            Run Migrations
+          </Button>
           <Button variant="secondary" size="sm" icon={<Download size={14}/>} onClick={()=>exportCSV('dashboard_stats.csv',['Metric','Value'],[['Total SMS',String(smsLogs.length)],['Delivered SMS',String(smsLogs.filter(l=>l.status==='delivered').length)],['Failed SMS',String(smsLogs.filter(l=>l.status==='failed').length)],['Active Clients',clients.filter(c=>c.status==='active').length+'/'+clients.length],['Active Binds',boundCount+'/'+(boundCount+unboundCount)],['Consecutive Failures',String(consecutiveFails)],['Low Balance Clients',String(lowBalanceClients.length)],['Channel Disconnects',String(blockedSuppliers.length)],['Pending Invoices',String(recentInvoices.length)],['Total Clients',String(clients.length)],['Total Suppliers',String(suppliers.length)],['Total Invoices',String(invoices.length)],['Total Payments',String(payments.length)]])}>Stats CSV</Button>
           <Button variant="secondary" size="sm" icon={<Download size={14}/>} onClick={()=>exportExcel('dashboard_stats.xlsx','Dashboard Stats',['Metric','Value'],[['Total SMS',String(smsLogs.length)],['Delivered SMS',String(smsLogs.filter(l=>l.status==='delivered').length)],['Failed SMS',String(smsLogs.filter(l=>l.status==='failed').length)],['Active Clients',clients.filter(c=>c.status==='active').length+'/'+clients.length],['Active Binds',boundCount+'/'+(boundCount+unboundCount)],['Consecutive Failures',String(consecutiveFails)],['Low Balance Clients',String(lowBalanceClients.length)],['Channel Disconnects',String(blockedSuppliers.length)],['Pending Invoices',String(recentInvoices.length)],['Total Clients',String(clients.length)],['Total Suppliers',String(suppliers.length)],['Total Invoices',String(invoices.length)],['Total Payments',String(payments.length)]])}>Stats Excel</Button>
           {alerts.length > 0 && <Button variant="secondary" size="sm" icon={<Download size={14}/>} onClick={()=>exportCSV('dashboard_alerts.csv',['Type','Title','Message','Time'],alerts.map(a=>[a.type,a.title,a.message,a.time]))}>Alerts CSV</Button>}

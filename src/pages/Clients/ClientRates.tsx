@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Plus, Search, Download, Trash2, Edit, Send, CheckSquare, Square, Mail, Clock } from 'lucide-react';
+import { Plus, Search, Download, Trash2, Edit, Send, CheckSquare, Square, Mail, Clock, ToggleLeft, ToggleRight } from 'lucide-react';
 import { useData } from '../../store/DataContext';
 import { Card } from '../../components/UI/Card';
 import { Button } from '../../components/UI/Button';
@@ -43,20 +43,27 @@ export const ClientRates: React.FC = () => {
   const [targetSupplierId, setTargetSupplierId] = useState('');
 
   const [formData, setFormData] = useState({ entity_id:'', mcc:'', country:'', rate:0, effective_from: new Date().toISOString().split('T')[0], is_active:true });
+  const [showDeleted, setShowDeleted] = useState(false);
   const itemsPerPage = 20;
 
   const clientRates = allRates.filter(r => r.entity_type === 'client');
-  const countries = useMemo(() => [...new Set(mccmnc.map(m => m.country))].sort(), [mccmnc]);
+  // Set of active client IDs for detecting deleted-client rates
+  const activeClientIds = useMemo(() => new Set((clients || []).map(c => String(c.id))), [clients]);
+  const isClientDeleted = (entityId: string) => !activeClientIds.has(String(entityId));
+  const deletedRateCount = useMemo(() => clientRates.filter(r => isClientDeleted(r.entity_id)).length, [clientRates, activeClientIds]);
+  const countries = useMemo(() => {
+    if (!mccmnc || !Array.isArray(mccmnc) || mccmnc.length === 0) return [];
+    return [...new Set(mccmnc.filter(m => m && m.country).map(m => m.country))].sort();
+  }, [mccmnc]);
 
   const filteredRates = clientRates.filter(rate => {
+    // Exclude deleted-client rates unless showDeleted is toggled
+    if (!showDeleted && isClientDeleted(rate.entity_id)) return false;
     const ms = rate.country.toLowerCase().includes(search.toLowerCase()) || rate.mcc.includes(search);
     const mc = clientFilter === 'all' || rate.entity_id === clientFilter;
     const mco = countryFilter === 'all' || rate.country === countryFilter;
     return ms && mc && mco;
   });
-  const displayedRates = filterDir === 'none' ? filteredRates : filteredRates.filter(r => getChangeDir(r) === filterDir);
-  const totalPages = Math.ceil(displayedRates.length / itemsPerPage);
-  const paginatedRates = displayedRates.slice((currentPage-1)*itemsPerPage, currentPage*itemsPerPage);
 
   // Build lookup: most recent inactive rate per entity/destination pair
   const prevRateMap = useMemo(() => {
@@ -70,6 +77,23 @@ export const ClientRates: React.FC = () => {
     });
     return map;
   }, [allRates]);
+
+  // Must be defined before displayedRates and dirCounts which call it.
+  // Uses prevRateMap (above) to determine rate change direction.
+  // NOTE: using function declaration (not const arrow) so esbuild's scope
+  // hoisting can't create a TDZ by reordering declarations during minification.
+  function getChangeDir(r: Rate): 'increase'|'decrease'|'unchanged'|'new' {
+    const prev = prevRateMap.get(`${r.entity_type}|${r.entity_id}|${r.mcc}|${r.mnc}`);
+    if (!prev) return 'new';
+    if (r.rate > prev.rate) return 'increase';
+    if (r.rate < prev.rate) return 'decrease';
+    return 'unchanged';
+  }
+
+  const displayedRates = filterDir === 'none' ? filteredRates : filteredRates.filter(r => getChangeDir(r) === filterDir);
+  const totalPages = Math.ceil(displayedRates.length / itemsPerPage);
+  const paginatedRates = displayedRates.slice((currentPage-1)*itemsPerPage, currentPage*itemsPerPage);
+
   const getPrevRate = (r: Rate): Rate | null => {
     return prevRateMap.get(`${r.entity_type}|${r.entity_id}|${r.mcc}|${r.mnc}`) || null;
   };
@@ -91,16 +115,17 @@ export const ClientRates: React.FC = () => {
     });
     return { inc, dec, unch, nw, all: filteredRates.length };
   }, [filteredRates]);
-  const getChangeDir = (r: Rate): 'increase'|'decrease'|'unchanged'|'new' => {
-    const prev = prevRateMap.get(`${r.entity_type}|${r.entity_id}|${r.mcc}|${r.mnc}`);
-    if (!prev) return 'new';
-    if (r.rate > prev.rate) return 'increase';
-    if (r.rate < prev.rate) return 'decrease';
-    return 'unchanged';
-  };
 
-  const getClientName = (id: string) => { const c = clients.find(x => x.id === id); return c ? `${c.client_code} - ${c.company_name}` : 'Unknown'; };
-  const getClientEmail = (id: string) => { const c = clients.find(x => x.id === id); return c?.email || ''; };
+  const getClientName = (id: string) => {
+    if (!id || !clients || !Array.isArray(clients)) return 'Unknown';
+    const c = clients.find(x => x.id === id);
+    if (!c) return `Deleted Client (${id})`;
+    return `${c.client_code || '?'} - ${c.company_name || 'Unknown'}`;
+  };
+  const getClientEmail = (id: string) => {
+    if (!id || !clients) return '';
+    const c = clients.find(x => x.id === id); return c?.email || '';
+  };
 
   // Detect rate direction
   const getDirection = (oldRate: number, newRate: number): string => {
@@ -196,6 +221,10 @@ export const ClientRates: React.FC = () => {
   const handleBulkDelete = () => { selectedRates.forEach(id => deleteRate(id)); setSelectedRates([]); };
   const toggleSelect = (id: string) => setSelectedRates(p => p.includes(id) ? p.filter(i => i!==id) : [...p, id]);
 
+  const handleToggleRate = (rate: Rate) => {
+    updateRate(rate.id, { is_active: !rate.is_active });
+  };
+
   const showRateHistory = (rate: Rate) => {
     const hist = allRates.filter(r => r.entity_type==='client' && r.entity_id===rate.entity_id && r.mcc===rate.mcc && r.mnc===rate.mnc).sort((a,b) => new Date(b.effective_from).getTime() - new Date(a.effective_from).getTime());
     setHistoryRates(hist); setShowHistoryModal(true);
@@ -248,26 +277,29 @@ export const ClientRates: React.FC = () => {
   const columns = [
     { key:'select', header:'☑', width:'40px', render:(rate:Rate) => <button onClick={(e)=>{e.stopPropagation();toggleSelect(rate.id);}} className="p-1">{selectedRates.includes(rate.id)?<CheckSquare size={16} className="text-blue-600"/>:<Square size={16} className="text-gray-400"/>}</button> },
     { key:'type', header:'Type', width:'90px', render:() => <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full bg-blue-500 ring-2 ring-blue-100 flex-shrink-0" /><Badge variant="info" size="sm">Client</Badge></div> },
-    { key:'client', header:'Client', render:(rate:Rate) => <span className="text-sm">{getClientName(rate.entity_id)}</span> },
+    { key:'client', header:'Client', render:(rate:Rate) => {
+      const deleted = isClientDeleted(rate.entity_id);
+      return <div className="flex items-center gap-1.5"><span className={`text-sm ${deleted ? 'text-gray-400 italic' : ''}`}>{getClientName(rate.entity_id)}</span>{deleted && <Badge variant="default" size="sm">DELETED</Badge>}</div>;
+    } },
     { key:'destination', header:'Destination', render:(rate:Rate) => <div><p className="font-medium text-sm">{rate.country}</p><p className="text-xs text-gray-500">{rate.operator}</p></div> },
     { key:'mccmnc', header:'MCC/MNC', render:(rate:Rate) => <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded text-xs">{rate.mcc}{rate.mnc}</span> },
     { key:'rate', header:'Rate (EUR)', align:'right' as const, render:(rate:Rate) => <div className="text-right"><p className={`font-semibold text-sm ${rate.is_active?'text-gray-800':'text-red-500 line-through'}`}>€{rate.rate.toFixed(4)}</p>{!rate.is_active&&rate.effective_to&&<p className="text-[10px] text-red-400">Ended {rate.effective_to}</p>}</div> },
     { key:'prev', header:'Prev Rate', align:'right' as const, render:(rate:Rate)=>{const prev=getPrevRate(rate);return prev?<div className="text-right"><p className="text-xs text-gray-400 line-through">€{prev.rate.toFixed(4)}</p><p className={`text-[10px] font-medium ${rate.rate>prev.rate?'text-red-500':rate.rate<prev.rate?'text-green-500':'text-gray-400'}`}>{prev.rate===0?`↑ New`:rate.rate>prev.rate?`↑ ${((rate.rate-prev.rate)/prev.rate*100).toFixed(1)}%`:rate.rate<prev.rate?`↓ ${((prev.rate-rate.rate)/prev.rate*100).toFixed(1)}%`:'→ 0%'}</p><p className="text-[10px] text-gray-400">{prev.effective_from?formatDate(prev.effective_from):''}</p></div>:<span className="text-xs text-gray-300">—</span>}},
     { key:'effective', header:'Effective', render:(rate:Rate) => <span className="text-xs">{formatDate(rate.effective_from)} {rate.is_active?<span className="text-green-500">● Active</span>:<span className="text-red-500">● Inactive</span>}</span> },
     { key:'status', header:'Status', render:(rate:Rate) => <Badge variant={rate.is_active?'success':'danger'} dot size="sm">{rate.is_active?'Active':'Inactive'}</Badge> },
-    { key:'actions', header:'', render:(rate:Rate) => <div className="flex gap-1">{rate.is_active&&<><button onClick={(e)=>{e.stopPropagation();openModal(rate);}} className="p-1 rounded hover:bg-gray-100"><Edit size={14} className="text-gray-500"/></button><button onClick={(e)=>{e.stopPropagation();handleSendNotification(rate);}} className="p-1 rounded hover:bg-gray-100"><Mail size={14} className="text-blue-500"/></button></>}<button onClick={(e)=>{e.stopPropagation();showRateHistory(rate);}} className="p-1 rounded hover:bg-gray-100"><Clock size={14} className="text-purple-500"/></button><button onClick={(e)=>{e.stopPropagation();deleteRate(rate.id);}} className="p-1 rounded hover:bg-gray-100"><Trash2 size={14} className="text-red-500"/></button></div> },
+    { key:'actions', header:'', render:(rate:Rate) => <div className="flex gap-1"><button onClick={(e)=>{e.stopPropagation();handleToggleRate(rate);}} className="p-1 rounded hover:bg-gray-100" title={rate.is_active ? 'Disable rate' : 'Enable rate'}>{rate.is_active ? <ToggleRight size={14} className="text-green-500" /> : <ToggleLeft size={14} className="text-gray-400" />}</button>{rate.is_active&&<><button onClick={(e)=>{e.stopPropagation();openModal(rate);}} className="p-1 rounded hover:bg-gray-100"><Edit size={14} className="text-gray-500"/></button><button onClick={(e)=>{e.stopPropagation();handleSendNotification(rate);}} className="p-1 rounded hover:bg-gray-100"><Mail size={14} className="text-blue-500"/></button></>}<button onClick={(e)=>{e.stopPropagation();showRateHistory(rate);}} className="p-1 rounded hover:bg-gray-100"><Clock size={14} className="text-purple-500"/></button><button onClick={(e)=>{e.stopPropagation();deleteRate(rate.id);}} className="p-1 rounded hover:bg-gray-100"><Trash2 size={14} className="text-red-500"/></button></div> },
   ];
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div><h1 className="text-2xl font-bold text-gray-800">Client Rates</h1><p className="text-gray-500 mt-1">{clientRates.length} rates — Select country → multi-select operators → one click add all</p></div>
+        <div><h1 className="text-2xl font-bold text-gray-800">Client Rates</h1><p className="text-gray-500 mt-1">{clientRates.length} rates{deletedRateCount > 0 && ` (${deletedRateCount} from deleted clients)`} — Select country → multi-select operators → one click add all</p></div>
         <div className="flex gap-2"><Button variant="secondary" icon={<Download size={16}/>} onClick={handleExportCSV}>Export CSV</Button><Button variant="secondary" icon={<Download size={16}/>} onClick={handleExportExcel}>Export Excel</Button><Button icon={<Plus size={18}/>} onClick={()=>openModal()}>Add Rate</Button></div>
       </div>
 
       {selectedRates.length > 0 && <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center justify-between"><span className="text-blue-700 font-medium text-sm">{selectedRates.length} selected</span><div className="flex gap-2"><Button size="sm" variant="secondary" icon={<Send size={14}/>} onClick={()=>handleSendNotification(clientRates.find(r=>r.id===selectedRates[0])!)}>Send Notice</Button><Button size="sm" variant="danger" icon={<Trash2 size={14}/>} onClick={handleBulkDelete}>Delete</Button></div></div>}
 
-      <Card><div className="flex flex-col md:flex-row gap-3"><div className="flex-1 relative"><Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/><input type="text" placeholder="Search..." value={search} onChange={e=>setSearch(e.target.value)} className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/></div><select value={clientFilter} onChange={e=>{setClientFilter(e.target.value);setCurrentPage(1);}} className="px-4 py-2 border border-gray-300 rounded-lg text-sm"><option value="all">All Clients</option>{clients.map(c=><option key={c.id} value={c.id}>{c.client_code} - {c.company_name}</option>)}</select><select value={countryFilter} onChange={e=>{setCountryFilter(e.target.value);setCurrentPage(1);}} className="px-4 py-2 border border-gray-300 rounded-lg text-sm"><option value="all">All Countries</option>{countries.map(c=><option key={c} value={c}>{c}</option>)}</select></div><div className="flex gap-1 mt-2 md:mt-0"><button onClick={()=>{setFilterDir('none');setCurrentPage(1);}} title="Show all rates" className={`px-3 py-1.5 text-xs rounded-lg border transition ${filterDir==='none'?'bg-blue-50 border-blue-300 text-blue-700':'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>All ({dirCounts.all})</button><button onClick={()=>{setFilterDir('increase');setCurrentPage(1);}} title="Show only rates with price increases" className={`px-3 py-1.5 text-xs rounded-lg border transition ${filterDir==='increase'?'bg-red-50 border-red-300 text-red-700':'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>↑ Increase ({dirCounts.inc})</button><button onClick={()=>{setFilterDir('decrease');setCurrentPage(1);}} title="Show only rates with price decreases" className={`px-3 py-1.5 text-xs rounded-lg border transition ${filterDir==='decrease'?'bg-green-50 border-green-300 text-green-700':'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>↓ Decrease ({dirCounts.dec})</button><button onClick={()=>{setFilterDir('unchanged');setCurrentPage(1);}} title="Show only rates with unchanged prices" className={`px-3 py-1.5 text-xs rounded-lg border transition ${filterDir==='unchanged'?'bg-gray-100 border-gray-400 text-gray-700':'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>→ Same ({dirCounts.unch})</button><button onClick={()=>{setFilterDir('new');setCurrentPage(1);}} title="Show only rates with no previous price history" className={`px-3 py-1.5 text-xs rounded-lg border transition ${filterDir==='new'?'bg-amber-50 border-amber-300 text-amber-700':'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>★ New ({dirCounts.nw})</button></div></Card>
+      <Card><div className="flex flex-col md:flex-row gap-3"><div className="flex-1 relative"><Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/><input type="text" placeholder="Search..." value={search} onChange={e=>setSearch(e.target.value)} className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/></div><select value={clientFilter} onChange={e=>{setClientFilter(e.target.value);setCurrentPage(1);}} className="px-4 py-2 border border-gray-300 rounded-lg text-sm"><option value="all">All Clients</option>{clients.map(c=><option key={c.id} value={c.id}>{c.client_code} - {c.company_name}</option>)}</select><select value={countryFilter} onChange={e=>{setCountryFilter(e.target.value);setCurrentPage(1);}} className="px-4 py-2 border border-gray-300 rounded-lg text-sm"><option value="all">All Countries</option>{countries.map(c=><option key={c} value={c}>{c}</option>)}</select></div><div className="flex gap-1 mt-2 md:mt-0"><button onClick={()=>{setFilterDir('none');setCurrentPage(1);}} title="Show all rates" className={`px-3 py-1.5 text-xs rounded-lg border transition ${filterDir==='none'?'bg-blue-50 border-blue-300 text-blue-700':'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>All ({dirCounts.all})</button><button onClick={()=>{setFilterDir('increase');setCurrentPage(1);}} title="Show only rates with price increases" className={`px-3 py-1.5 text-xs rounded-lg border transition ${filterDir==='increase'?'bg-red-50 border-red-300 text-red-700':'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>↑ Increase ({dirCounts.inc})</button><button onClick={()=>{setFilterDir('decrease');setCurrentPage(1);}} title="Show only rates with price decreases" className={`px-3 py-1.5 text-xs rounded-lg border transition ${filterDir==='decrease'?'bg-green-50 border-green-300 text-green-700':'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>↓ Decrease ({dirCounts.dec})</button><button onClick={()=>{setFilterDir('unchanged');setCurrentPage(1);}} title="Show only rates with unchanged prices" className={`px-3 py-1.5 text-xs rounded-lg border transition ${filterDir==='unchanged'?'bg-gray-100 border-gray-400 text-gray-700':'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>→ Same ({dirCounts.unch})</button><button onClick={()=>{setFilterDir('new');setCurrentPage(1);}} title="Show only rates with no previous price history" className={`px-3 py-1.5 text-xs rounded-lg border transition ${filterDir==='new'?'bg-amber-50 border-amber-300 text-amber-700':'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>★ New ({dirCounts.nw})</button>{deletedRateCount > 0 && <button onClick={()=>{setShowDeleted(!showDeleted);setCurrentPage(1);}} title="Toggle visibility of rates belonging to deleted clients" className={`px-3 py-1.5 text-xs rounded-lg border transition ${showDeleted?'bg-gray-100 border-gray-400 text-gray-700':'border-gray-200 text-gray-400 hover:bg-gray-50'}`}>🗑 Deleted ({deletedRateCount})</button>}</div></Card>
 
       <Card noPadding><Table columns={columns} data={paginatedRates} keyExtractor={r=>r.id} /><Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} totalItems={displayedRates.length} itemsPerPage={itemsPerPage}/></Card>
 
@@ -275,7 +307,7 @@ export const ClientRates: React.FC = () => {
       <Modal isOpen={showModal} onClose={()=>setShowModal(false)} title={editingRate?'Edit Rate':'Add New Rates (Multi-Operator)'} size="lg" footer={<div className="flex justify-between w-full"><span className="text-sm text-gray-500">{selectedMncs.includes('*') ? `All ${mccmnc.filter(m=>m.country===selectedCountry).length} operators` : `${selectedMncs.length} operators`} selected</span><div className="flex gap-3"><Button variant="secondary" onClick={()=>setShowModal(false)}>Cancel</Button><Button onClick={handleSubmit}>Add Rates</Button></div></div>}>
         <div className="space-y-4">
           {editingRate&&editingRate.is_active&&<div className="bg-yellow-50 p-3 rounded-lg text-sm text-yellow-700">⚠ This will deactivate current rate (€{editingRate.rate.toFixed(4)}) and create a new version with timestamp.</div>}
-          <Select label="Client *" value={formData.entity_id} onChange={e=>setFormData(p=>({...p,entity_id:e.target.value}))} options={[{value:'',label:'Select Client'},...clients.map(c=>({value:c.id,label:`${c.client_code} - ${c.company_name}`}))]} required/>
+          <Select label="Client *" value={formData.entity_id} onChange={e=>setFormData(p=>({...p,entity_id:e.target.value}))} options={[{value:'',label:'Select Client'},...(clients || []).map(c=>({value:c.id,label:`${c.client_code || '?'} - ${c.company_name || 'Unknown'}`}))]} required/>
           <Select label="Country *" value={selectedCountry} onChange={e => onSelectCountry(e.target.value)} options={[{value:'',label:'Select Country'},...countries.map(c=>({value:c,label:c}))]} required/>
           {selectedCountry && (
             <div className="bg-gray-50 rounded-lg p-4 max-h-60 overflow-y-auto">
@@ -287,7 +319,7 @@ export const ClientRates: React.FC = () => {
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-2">
-                {mccmnc.filter(m => m.country === selectedCountry).map(op => (
+                {(mccmnc || []).filter(m => m && m.country === selectedCountry).map(op => (
                   <label key={op.mnc} className={`flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer transition text-sm ${selectedMncs.includes(op.mnc) || selectedMncs.includes('*') ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-200' : 'border-gray-200 hover:border-gray-300'}`}>
                     <input type="checkbox" checked={selectedMncs.includes(op.mnc) || selectedMncs.includes('*')} onChange={() => toggleMnc(op.mnc)} className="w-4 h-4 rounded border-gray-300 text-blue-600"/>
                     <div className="flex-1 min-w-0"><div className="flex items-center gap-1.5"><span className="font-mono font-semibold text-blue-700 text-sm">{op.mnc}</span><span className="text-gray-600 truncate text-sm">{op.operator}</span></div><span className="text-[10px] text-gray-400">MCC: {op.mcc} • {op.network_type}</span></div>
